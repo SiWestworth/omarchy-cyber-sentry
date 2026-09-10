@@ -40,19 +40,26 @@ password interactively.
 
 ## Install
 
-Copy or symlink the plugin folder into your Omarchy plugins directory:
-
 ```
-cp -r cyber.sentry ~/.config/omarchy/plugins/cyber.sentry
-```
-
-Then enable it:
-
-```
-omarchy plugin enable cyber.sentry right
+omarchy plugin add https://github.com/SiWestworth/omarchy-cyber-sentry.git --enable
 ```
 
 Reload the shell (`Ctrl+Shift+R` in Hyprland) and the shield icon appears in your bar.
+
+Alternatively, clone or copy this repo's contents directly into
+`~/.config/omarchy/plugins/cyber.sentry` and run
+`omarchy plugin enable cyber.sentry right`.
+
+## Uninstall
+
+```
+omarchy plugin remove cyber.sentry
+```
+
+This disables the widget and removes the plugin folder. It does not delete
+your saved settings or notification history under
+`~/.local/state/omarchy/settings/` — remove those manually if you want a
+completely clean uninstall.
 
 ## How it works
 
