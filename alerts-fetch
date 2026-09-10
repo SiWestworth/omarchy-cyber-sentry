@@ -1,0 +1,105 @@
+#!/bin/bash
+
+# NCSC-NL vendor advisory feed fetcher.
+#
+# Usage: alerts-fetch [--days N]
+#
+# Fetches (and TTL-caches) the NCSC-NL advisories RSS feed — official
+# Dutch national CERT advisories covering Google, Microsoft, Cisco,
+# Mozilla, Linux, and other major vendors. CISA's own advisory RSS is
+# bot-blocked from most machines, so NCSC-NL is the working alternative.
+#
+# Prints {"ok":true,"source":"alerts","count":N,"checkedAt":...,"advisories":[...]}
+# or {"ok":false,"error":"..."} — exiting 0 either way.
+
+set -uo pipefail
+
+readonly URL="https://advisories.ncsc.nl/rss/advisories"
+readonly UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0"
+readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
+readonly CACHE_FILE="$CACHE_DIR/alerts-cache.xml"
+readonly JSON_CACHE="$CACHE_DIR/alerts-parsed.json"
+readonly TTL="${SENTRY_ALERTS_TTL:-7200}"
+
+die() {
+  jq -cn --arg m "$1" '{ok:false, source:"alerts", error:$m}'
+  exit 0
+}
+
+DAYS=14
+if [[ ${1:-} == "--days" && -n ${2:-} ]]; then
+  DAYS=$2
+  shift 2
+fi
+
+mkdir -p "$CACHE_DIR" 2>/dev/null
+
+needs_refresh() {
+  [[ -s $JSON_CACHE ]] || return 0
+  local now age
+  now=$(date +%s)
+  age=$((now - $(stat -c %Y "$JSON_CACHE" 2>/dev/null || echo 0)))
+  (( age >= TTL ))
+}
+
+if [[ ${1:-} == "--force" ]] || needs_refresh; then
+  tmp="$CACHE_FILE.tmp.$$"
+  if curl -fsSL --max-time 25 -A "$UA" "$URL" -o "$tmp" 2>/dev/null; then
+    if xmllint --noout "$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$CACHE_FILE"
+    else
+      rm -f "$tmp"
+    fi
+  else
+    rm -f "$tmp"
+  fi
+
+  # Parse XML to JSON. The NCSC RSS has multi-line <description> blocks
+  # that break field-separator approaches, so we extract each field
+  # separately with xmlstarlet and zip them together with paste.
+  if [[ -s $CACHE_FILE ]]; then
+    cutoff=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || \
+             date -u -v-"${DAYS}"d +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "")
+
+    # Extract each field into separate newline-delimited files
+    xmlstarlet sel -t -m "//item" -v "title" -n "$CACHE_FILE" 2>/dev/null \
+      | sed 's/^  *//' > "$CACHE_DIR/_titles.txt"
+    xmlstarlet sel -t -m "//item" -v "link" -n "$CACHE_FILE" 2>/dev/null \
+      | sed 's/^  *//' > "$CACHE_DIR/_links.txt"
+    xmlstarlet sel -t -m "//item" -v "pubDate" -n "$CACHE_FILE" 2>/dev/null \
+      | sed 's/^  *//' > "$CACHE_DIR/_dates.txt"
+
+    # Combine fields: paste joins by \t, jq splits and builds JSON
+    paste -d$'\t' \
+      "$CACHE_DIR/_titles.txt" \
+      "$CACHE_DIR/_links.txt" \
+      "$CACHE_DIR/_dates.txt" | \
+    while IFS=$'\t' read -r title link pubDate; do
+      [[ -n $title ]] || continue
+
+      iso_date=""
+      if [[ -n $pubDate ]]; then
+        iso_date=$(date -u -d "$pubDate" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
+                   date -u -jf "%a, %d %b %Y %H:%M:%S %z" "$pubDate" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+      fi
+
+      if [[ -n $cutoff && -n $iso_date && "$iso_date" < "$cutoff" ]]; then
+        continue
+      fi
+
+      printf '%s\t%s\t%s\n' \
+        "$(echo "$title" | sed 's/"/\\"/g')" \
+        "$(echo "$link" | sed 's/"/\\"/g')" \
+        "$iso_date"
+    done | \
+    jq -Rc 'split("\t") | {title: .[0], link: .[1], date: .[2]}' | \
+    jq -sc --arg checked "$(date -u +%FT%TZ)" \
+      '{ok:true, source:"alerts", count:length, checkedAt:$checked, advisories:.}' > "$JSON_CACHE" 2>/dev/null
+
+    rm -f "$CACHE_DIR/_titles.txt" "$CACHE_DIR/_links.txt" "$CACHE_DIR/_dates.txt"
+  fi
+fi
+
+[[ -s $JSON_CACHE ]] || die "NCSC-NL advisory feed is unavailable or unparseable"
+
+cat "$JSON_CACHE"

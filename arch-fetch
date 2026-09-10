@@ -1,0 +1,144 @@
+#!/bin/bash
+
+# Arch Security Tracker advisory fetcher with local package correlation.
+#
+# Usage: arch-fetch [--force]
+#
+# Fetches (and TTL-caches) the Arch Security Tracker advisory feed, builds a
+# map of locally installed packages from `pacman -Q`, and emits only the
+# advisories that affect an installed package — i.e. installed version is
+# older than the fixed version (or no fix has been released).
+#
+# Prints {"ok":true,"source":"arch","count":N,"checkedAt":...,"advisories":[...]}
+# or {"ok":false,"error":"..."} — exiting 0 either way so the panel can render
+# the reason. Version comparison uses `vercmp` so epochs and pkgrel are handled
+# with pacman semantics.
+
+set -uo pipefail
+
+readonly URL="https://security.archlinux.org/json"
+readonly UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0"
+readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
+readonly CACHE_FILE="$CACHE_DIR/arch-advisories.json"
+readonly TTL="${SENTRY_ARCH_TTL:-300}"
+
+die() {
+  jq -cn --arg m "$1" '{ok:false, source:"arch", error:$m}'
+  exit 0
+}
+
+mkdir -p "$CACHE_DIR" 2>/dev/null
+
+needs_refresh() {
+  [[ -s $CACHE_FILE ]] || return 0
+  local now age
+  now=$(date +%s)
+  age=$((now - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
+  (( age >= TTL ))
+}
+
+if [[ ${1:-} == --force ]] || needs_refresh; then
+  tmp="$CACHE_FILE.tmp.$$"
+  if curl -fsSL --max-time 25 -A "$UA" "$URL" -o "$tmp" 2>/dev/null &&
+     jq -e 'type=="array"' "$tmp" >/dev/null 2>&1; then
+    mv -f "$tmp" "$CACHE_FILE"
+  else
+    rm -f "$tmp"
+  fi
+fi
+
+[[ -s $CACHE_FILE ]] || die "Arch Security Tracker is unreachable"
+jq -e 'type=="array"' "$CACHE_FILE" >/dev/null 2>&1 ||
+  die "Arch Security Tracker returned unparseable data"
+
+declare -A installed
+installed_count=0
+while read -r name ver; do
+  if [[ -n $name && -n $ver ]]; then
+    installed[$name]="$ver"
+    ((installed_count++))
+  fi
+done < <(pacman -Q 2>/dev/null)
+
+[[ $installed_count -gt 0 ]] || die "pacman -Q returned no packages"
+
+declare -A rows sev type cves refs dates fixed unfixed pkgs
+
+# One \x1f-separated row per (advisory, package) pair. An advisory only becomes
+# a row once a vulnerable installed package is found for it. \x1f is used
+# instead of tab because bash treats tab as IFS whitespace and would collapse
+# empty fields, shifting every column after one.
+#
+# Affected means: the tracker does not mark it "Not affected", AND either the
+# installed version is older than the fixed version, or the advisory is open
+# ("Vulnerable", no fix released) with the installed version still at or below
+# the vulnerable `affected` version.
+while IFS=$'\x1f' read -r adv pkg affectedver fixedver severity typ cvelist ref date status; do
+  [[ -n $pkg && -n ${installed[$pkg]:-} ]] || continue
+  [[ $status == "Not affected" ]] && continue
+  local_ver=${installed[$pkg]}
+  affected=0
+  if [[ -n $fixedver ]]; then
+    fixed[$adv]=$fixedver
+    if rc=$(vercmp "$local_ver" "$fixedver" 2>/dev/null); then
+      (( rc < 0 )) && affected=1
+    else
+      echo "warn: vercmp failed for $pkg ($local_ver vs $fixedver)" >&2
+      affected=1
+    fi
+  elif [[ $status == "Vulnerable" && -n $affectedver ]]; then
+    if rc=$(vercmp "$local_ver" "$affectedver" 2>/dev/null); then
+      if (( rc <= 0 )); then
+        unfixed[$adv]=1
+        affected=1
+      fi
+    else
+      echo "warn: vercmp failed for $pkg ($local_ver vs $affectedver)" >&2
+      unfixed[$adv]=1
+      affected=1
+    fi
+  fi
+  (( affected )) || continue
+  rows[$adv]=1
+  sev[$adv]=$severity
+  type[$adv]=$typ
+  cves[$adv]=$cvelist
+  refs[$adv]=$ref
+  dates[$adv]=$date
+  pkgs[$adv]+="${pkgs[$adv]:+;}$pkg=$local_ver"
+done < <(jq -r '.[] | . as $a | (($a.packages // []) | if length==0 then [""] else . end)[] | [
+  $a.name, ., ($a.affected // ""), ($a.fixed // ""), ($a.severity // ""),
+  ($a.type // ""), (($a.issues // []) | join("|")), ($a.reference // ""),
+  ($a.issue_date // $a.date // ""), ($a.status // "")
+] | join("\u001f")' "$CACHE_FILE")
+
+out=$(
+  for adv in "${!rows[@]}"; do
+    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' \
+      "$adv" "${pkgs[$adv]:-}" "${fixed[$adv]:-}" "${unfixed[$adv]:-}" \
+      "${sev[$adv]:-}" "${type[$adv]:-}" "${cves[$adv]:-}" "${dates[$adv]:-}" \
+      "${refs[$adv]:-}"
+  done |
+    jq -R -s '
+      split("\n") | map(select(length > 0)) | map(
+        split("\u001f") |
+        {
+          name: .[0],
+          packages: (.[1] // ""),
+          fixed: .[2],
+          unfixed: (.[3] == "1"),
+          severity: .[4],
+          type: .[5],
+          cves: ((.[6] // "") | split("|") | map(select(length > 0))),
+          date: .[7],
+          reference: .[8]
+        }
+      )'
+)
+
+count=$(printf '%s' "$out" | jq 'length')
+
+printf '%s' "$out" | jq -c --arg checked "$(date -u +%FT%TZ)" \
+  --argjson installed "$installed_count" \
+  '{ok:true, source:"arch", count:length, checkedAt:$checked,
+    installedChecked:$installed, advisories:.}'

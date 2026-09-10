@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 1,
+  "id": "cyber.sentry",
+  "name": "Cyber Sentry",
+  "version": "2.1.0",
+  "author": "futuresi",
+  "license": "MIT",
+  "description": "Cybersecurity threat intelligence: which exploited-in-the-wild vulnerabilities affect the packages installed on this machine, with CISA KEV, CVE detail, EPSS exploit-probability scores, NVD recent CVEs, ExploitDB public exploits, and NCSC-NL vendor advisories.",
+  "homepage": "https://github.com/SiWestworth/omarchy-cyber-sentry",
+  "repository": "https://github.com/SiWestworth/omarchy-cyber-sentry",
+  "keywords": [
+    "security",
+    "threat-intel",
+    "cve",
+    "kev",
+    "epss",
+    "exploited",
+    "vulnerability",
+    "arch",
+    "nvd",
+    "exploitdb",
+    "ncsc",
+    "advisories"
+  ],
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Cyber Sentry",
+    "description": "Threat intelligence that knows what you have installed — Arch Security Tracker advisories correlated against pacman -Q, CISA KEV, EPSS exploit-probability, NVD recent CVEs, ExploitDB public exploits, and NCSC-NL vendor advisories.",
+    "category": "Security",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalMin": 30,
+      "severityThreshold": "Medium",
+      "archEnabled": true,
+      "kevEnabled": true,
+      "nvdEnabled": true,
+      "alertsEnabled": true,
+      "epssEnabled": true,
+      "exploitdbEnabled": true,
+      "notifyOnAffected": true,
+      "notifyOnKev": true,
+      "notifyOnNvd": false,
+      "notifyOnAlerts": false,
+      "notifyCooldownMin": 60,
+      "maxItems": 50,
+      "showBadge": true,
+      "showKevBadge": false,
+      "kevRecentDays": 90,
+      "kevAffectsMeOnly": false
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalMin",
+        "type": "integer",
+        "label": "Poll interval (minutes)",
+        "min": 10,
+        "max": 1440,
+        "step": 5,
+        "defaultValue": 30
+      },
+      {
+        "key": "severityThreshold",
+        "type": "string",
+        "label": "Lowest severity shown and notified",
+        "defaultValue": "Medium"
+      },
+      {
+        "key": "archEnabled",
+        "type": "boolean",
+        "label": "Watch Arch Security Tracker advisories",
+        "defaultValue": true
+      },
+      {
+        "key": "kevEnabled",
+        "type": "boolean",
+        "label": "Watch the CISA Known Exploited Vulnerabilities catalog",
+        "defaultValue": true
+      },
+      {
+        "key": "nvdEnabled",
+        "type": "boolean",
+        "label": "Watch recent High/Critical CVEs from NVD",
+        "defaultValue": true
+      },
+      {
+        "key": "alertsEnabled",
+        "type": "boolean",
+        "label": "Watch NCSC-NL vendor advisories",
+        "defaultValue": true
+      },
+      {
+        "key": "epssEnabled",
+        "type": "boolean",
+        "label": "Show EPSS exploit-probability scores",
+        "defaultValue": true
+      },
+      {
+        "key": "exploitdbEnabled",
+        "type": "boolean",
+        "label": "Check for public exploits on ExploitDB",
+        "defaultValue": true
+      },
+      {
+        "key": "notifyOnAffected",
+        "type": "boolean",
+        "label": "Notify when a new advisory affects an installed package",
+        "defaultValue": true
+      },
+      {
+        "key": "notifyOnKev",
+        "type": "boolean",
+        "label": "Notify when a new entry is added to the KEV catalog",
+        "defaultValue": true
+      },
+      {
+        "key": "notifyOnNvd",
+        "type": "boolean",
+        "label": "Notify on new High/Critical NVD CVEs",
+        "defaultValue": false
+      },
+      {
+        "key": "notifyOnAlerts",
+        "type": "boolean",
+        "label": "Notify on new vendor advisories",
+        "defaultValue": false
+      },
+      {
+        "key": "notifyCooldownMin",
+        "type": "integer",
+        "label": "Minutes before an item is re-notified",
+        "min": 5,
+        "max": 1440,
+        "step": 5,
+        "defaultValue": 60
+      },
+      {
+        "key": "maxItems",
+        "type": "integer",
+        "label": "Maximum list rows per tab",
+        "min": 10,
+        "max": 500,
+        "step": 10,
+        "defaultValue": 50
+      },
+      {
+        "key": "showBadge",
+        "type": "boolean",
+        "label": "Show the affected-package count badge on the bar icon",
+        "defaultValue": true
+      },
+      {
+        "key": "showKevBadge",
+        "type": "boolean",
+        "label": "Include KEV count in the bar badge",
+        "defaultValue": false
+      },
+      {
+        "key": "kevRecentDays",
+        "type": "integer",
+        "label": "Show KEV entries from the last N days (0 = all)",
+        "min": 0,
+        "max": 365,
+        "step": 7,
+        "defaultValue": 90
+      },
+      {
+        "key": "kevAffectsMeOnly",
+        "type": "boolean",
+        "label": "KEV tab: only show entries matching installed packages",
+        "defaultValue": false
+      }
+    ]
+  }
+}

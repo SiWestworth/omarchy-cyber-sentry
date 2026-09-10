@@ -1,0 +1,95 @@
+#!/bin/bash
+
+# FIRST.org Exploit Prediction Scoring System (EPSS) fetcher.
+#
+# Usage: epss-fetch CVE-YYYY-XXXX [CVE-YYYY-XXXX ...]
+#
+# Batch-queries EPSS scores for the given CVEs (up to 100 per API call,
+# automatically batched). Returns a score map keyed by CVE ID.
+#
+# Prints {"ok":true,"scores":{"CVE-...":{epss,percentile}},...}
+# or {"ok":false,"error":"..."} — exiting 0 either way.
+
+set -uo pipefail
+
+readonly URL="https://api.first.org/data/v1/epss"
+readonly UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0"
+readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
+readonly CACHE_FILE="$CACHE_DIR/epss-cache.json"
+readonly TTL="${SENTRY_EPSS_TTL:-86400}"
+readonly BATCH_SIZE=100
+
+die() {
+  jq -cn --arg m "$1" '{ok:false, error:$m}'
+  exit 0
+}
+
+mkdir -p "$CACHE_DIR" 2>/dev/null
+
+# If no args, try to read CVE list from a cached helper file
+if [[ $# -eq 0 ]]; then
+  # Build CVE list from arch-fetch + kev-fetch cached outputs
+  cve_list=""
+  arch_cache="$CACHE_DIR/arch-advisories.json"
+  kev_cache="$CACHE_DIR/kev-catalog.json"
+  exploitdb_cache="$CACHE_DIR/exploitdb-matches.json"
+
+  if [[ -s $arch_cache ]]; then
+    cve_list+=$(jq -r '.[].issues[]? // empty' "$arch_cache" 2>/dev/null | tr '\n' ',')
+  fi
+  if [[ -s $kev_cache ]]; then
+    cve_list+=$(jq -r '.vulnerabilities[]?.cveID // empty' "$kev_cache" 2>/dev/null | tr '\n' ',')
+  fi
+  if [[ -s $exploitdb_cache ]]; then
+    cve_list+=$(jq -r '.matches[]?.cve // empty' "$exploitdb_cache" 2>/dev/null | tr '\n' ',')
+  fi
+
+  # Deduplicate
+  cve_list=$(echo "$cve_list" | tr ',' '\n' | sort -u | grep -E '^CVE-[0-9]+-[0-9]+$' | tr '\n' ',')
+  cve_list="${cve_list%,}"
+
+  [[ -n $cve_list ]] || die "no CVEs to look up"
+
+  # Convert to args
+  IFS=',' read -ra ARGS <<< "$cve_list"
+else
+  ARGS=("$@")
+fi
+
+# Validate CVE format
+valid_cves=()
+for cve in "${ARGS[@]}"; do
+  [[ $cve =~ ^CVE-[0-9]+-[0-9]+$ ]] && valid_cves+=("$cve")
+done
+
+[[ ${#valid_cves[@]} -gt 0 ]] || die "no valid CVE ids provided"
+
+# Batch POST to EPSS API
+scores="{}"
+for ((i=0; i<${#valid_cves[@]}; i+=BATCH_SIZE)); do
+  batch=("${valid_cves[@]:$i:$BATCH_SIZE}")
+  payload=$(printf '%s\n' "${batch[@]}" | jq -R . | jq -sc '{cve: .}')
+
+  raw=$(curl -fsSL --max-time 20 -A "$UA" \
+    -X POST "$URL" \
+    -H "Content-Type: application/json" \
+    -d "$payload" 2>/dev/null)
+
+  if [[ -z $raw ]]; then
+    continue
+  fi
+
+  batch_scores=$(printf '%s' "$raw" | jq -c '
+    (.data // []) | map({(.cve): {epss: .epss, percentile: .percentile}}) | add // {}
+  ' 2>/dev/null)
+
+  if [[ -n $batch_scores ]]; then
+    scores=$(printf '%s' "$scores" "$batch_scores" | jq -sc '.[0] * .[1]')
+  fi
+done
+
+count=$(printf '%s' "$scores" | jq 'length')
+[[ $count -gt 0 ]] || die "EPSS API returned no scores"
+
+printf '%s' "$scores" | jq -c --arg checked "$(date -u +%FT%TZ)" \
+  '{ok:true, count:length, checkedAt:$checked, scores:.}'

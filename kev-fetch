@@ -1,0 +1,92 @@
+#!/bin/bash
+
+# CISA Known Exploited Vulnerabilities catalog fetcher.
+#
+# Usage: kev-fetch [--recent-days N]
+#
+# Fetches (and TTL-caches) the KEV catalog from CISA, falling back to the
+# official cisagov GitHub mirror when cisa.gov is unreachable or blocked.
+# With --recent-days, only entries added within the last N days are emitted.
+#
+# Prints {"ok":true,"source":"kev","count":N,"checkedAt":...,"vulnerabilities":[...]}
+# or {"ok":false,"error":"..."} — exiting 0 either way so the panel can render
+# the reason.
+
+set -uo pipefail
+
+readonly URL="https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+readonly MIRROR="https://raw.githubusercontent.com/cisagov/kev-data/main/known_exploited_vulnerabilities.json"
+readonly UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0"
+readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
+readonly CACHE_FILE="$CACHE_DIR/kev-catalog.json"
+readonly TTL="${SENTRY_KEV_TTL:-3600}"
+
+die() {
+  jq -cn --arg m "$1" '{ok:false, source:"kev", error:$m}'
+  exit 0
+}
+
+RECENT_DAYS=""
+if [[ ${1:-} == --recent-days && -n ${2:-} ]]; then
+  RECENT_DAYS=$2
+  shift 2
+fi
+
+mkdir -p "$CACHE_DIR" 2>/dev/null
+
+needs_refresh() {
+  [[ -s $CACHE_FILE ]] || return 0
+  local now age
+  now=$(date +%s)
+  age=$((now - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
+  (( age >= TTL ))
+}
+
+if [[ ${1:-} == --force ]] || needs_refresh; then
+  tmp="$CACHE_FILE.tmp.$$"
+  if curl -fsSL --max-time 25 -A "$UA" "$URL" -o "$tmp" 2>/dev/null &&
+     jq -e 'type=="object" and (.vulnerabilities | type=="array")' "$tmp" >/dev/null 2>&1; then
+    mv -f "$tmp" "$CACHE_FILE"
+  else
+    rm -f "$tmp"
+    if curl -fsSL --max-time 25 -A "$UA" "$MIRROR" -o "$tmp" 2>/dev/null &&
+       jq -e 'type=="object" and (.vulnerabilities | type=="array")' "$tmp" >/dev/null 2>&1; then
+      mv -f "$tmp" "$CACHE_FILE"
+    else
+      rm -f "$tmp"
+    fi
+  fi
+fi
+
+[[ -s $CACHE_FILE ]] || die "CISA KEV catalog is unreachable"
+
+cutoff=""
+if [[ -n $RECENT_DAYS && $RECENT_DAYS =~ ^[0-9]+$ ]]; then
+  cutoff=$(date -u -d "$RECENT_DAYS days ago" +%Y-%m-%d 2>/dev/null || date -u -v-"$RECENT_DAYS"d +%Y-%m-%d 2>/dev/null || "")
+fi
+
+if [[ -n $cutoff ]]; then
+  filter=".vulnerabilities[] | select(.dateAdded >= \"$cutoff\")"
+else
+  filter=".vulnerabilities[]"
+fi
+
+out=$(jq -c --arg cutoff "$cutoff" \
+  '(.vulnerabilities // [])
+     | map(select($cutoff == "" or (.dateAdded // "") >= $cutoff))
+     | map({
+         cveID: (.cveID // ""),
+         vendorProject: (.vendorProject // ""),
+         product: (.product // ""),
+         vulnerabilityName: (.vulnerabilityName // ""),
+         dateAdded: (.dateAdded // ""),
+         shortDescription: (.shortDescription // ""),
+         requiredAction: (.requiredAction // ""),
+         dueDate: (.dueDate // ""),
+         knownRansomwareCampaignUse: (.knownRansomwareCampaignUse // "")
+       })' "$CACHE_FILE" 2>/dev/null)
+
+[[ -n $out ]] || die "CISA KEV catalog returned unparseable data"
+
+printf '%s' "$out" | jq -c --arg checked "$(date -u +%FT%TZ)" \
+  '{ok:true, source:"kev", count:length, checkedAt:$checked, vulnerabilities:.}'
