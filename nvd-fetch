@@ -21,10 +21,10 @@ readonly TTL="${SENTRY_NVD_TTL:-3600}"
 readonly MAX_RESULTS=200
 readonly MAX_BYTES=8388608
 
-source "$(dirname -- "${BASH_SOURCE[0]}")/_sentry-lib.sh"
+source "${BASH_SOURCE[0]%/*}/_sentry-lib.sh"
 
 die() {
-  jq -cn --arg m "$1" '{ok:false, source:"nvd", error:$m}'
+  "$SENTRY_BIN_JQ" -cn --arg m "$1" '{ok:false, source:"nvd", error:$m}'
   exit 0
 }
 
@@ -39,15 +39,15 @@ sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use
 needs_refresh() {
   [[ -s $CACHE_FILE ]] || return 0
   local now age
-  now=$(date +%s)
-  age=$((now - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
+  now=$("$SENTRY_BIN_DATE" +%s)
+  age=$((now - $("$SENTRY_BIN_STAT" -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
   (( age >= TTL ))
 }
 
 if [[ ${1:-} == "--force" ]] || needs_refresh; then
-  start_date=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%S.000 2>/dev/null || \
-               date -u -v-"${DAYS}"d +%Y-%m-%dT%H:%M:%S.000 2>/dev/null || echo "")
-  end_date=$(date -u +%Y-%m-%dT%H:%M:%S.000 2>/dev/null || echo "")
+  start_date=$("$SENTRY_BIN_DATE" -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%S.000 2>/dev/null || \
+               "$SENTRY_BIN_DATE" -u -v-"${DAYS}"d +%Y-%m-%dT%H:%M:%S.000 2>/dev/null || echo "")
+  end_date=$("$SENTRY_BIN_DATE" -u +%Y-%m-%dT%H:%M:%S.000 2>/dev/null || echo "")
 
   [[ -n $start_date && -n $end_date ]] || die "could not compute date range"
 
@@ -58,12 +58,12 @@ if [[ ${1:-} == "--force" ]] || needs_refresh; then
   for severity in HIGH CRITICAL; do
     url="${BASE_URL}?pubStartDate=${start_date}&pubEndDate=${end_date}&cvssV3Severity=${severity}&resultsPerPage=${MAX_RESULTS}"
 
-    raw=$(curl -fsSL --max-time 30 --max-filesize "$MAX_BYTES" \
+    raw=$("$SENTRY_BIN_CURL" -fsSL --max-time 30 --max-filesize "$MAX_BYTES" \
       "${SENTRY_CURL_HTTPS_ONLY[@]}" \
       -A "$UA" "$url" 2>/dev/null)
 
     if [[ -n $raw ]]; then
-      batch=$(printf '%s' "$raw" | jq -c '
+      batch=$(printf '%s' "$raw" | "$SENTRY_BIN_JQ" -c '
         [.vulnerabilities[]? | {
           id: .cve.id,
           published: .cve.published,
@@ -75,31 +75,31 @@ if [[ ${1:-} == "--force" ]] || needs_refresh; then
         }]' 2>/dev/null)
 
       if [[ -n $batch ]]; then
-        all_results=$(printf '%s' "$all_results" "$batch" | jq -sc '.[0] + .[1]')
+        all_results=$(printf '%s' "$all_results" "$batch" | "$SENTRY_BIN_JQ" -sc '.[0] + .[1]')
       fi
     fi
 
     # Respect rate limit: pause 7s between severity queries
-    sleep 7
+    "$SENTRY_BIN_SLEEP" 7
   done
 
   # Deduplicate by CVE ID
-  deduped=$(printf '%s' "$all_results" | jq -c '
+  deduped=$(printf '%s' "$all_results" | "$SENTRY_BIN_JQ" -c '
     unique_by(.id) | sort_by(.published) | reverse
   ' 2>/dev/null)
 
   [[ -n $deduped ]] || die "NVD API returned no results"
 
-  printf '%s' "$deduped" | jq -c --arg checked "$(date -u +%FT%TZ)" \
+  printf '%s' "$deduped" | "$SENTRY_BIN_JQ" -c --arg checked "$("$SENTRY_BIN_DATE" -u +%FT%TZ)" \
     '{ok:true, source:"nvd", count:length, checkedAt:$checked, cves:.}' > "$tmp" 2>/dev/null
 
-  [[ -s $tmp ]] && mv -f "$tmp" "$CACHE_FILE"
+  [[ -s $tmp ]] && "$SENTRY_BIN_MV" -f "$tmp" "$CACHE_FILE"
 fi
 
 [[ -s $CACHE_FILE ]] || die "NVD cache is empty"
 sentry_safe_regular_file "$CACHE_FILE" || die "cache file is not safe to read"
 
-jq -e 'type=="object" and (.cves | type=="array")' "$CACHE_FILE" >/dev/null 2>&1 ||
+"$SENTRY_BIN_JQ" -e 'type=="object" and (.cves | type=="array")' "$CACHE_FILE" >/dev/null 2>&1 ||
   die "NVD cache contains unparseable data"
 
-cat "$CACHE_FILE"
+"$SENTRY_BIN_CAT" "$CACHE_FILE"

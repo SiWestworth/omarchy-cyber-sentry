@@ -22,10 +22,10 @@ readonly CACHE_FILE="$CACHE_DIR/kev-catalog.json"
 readonly TTL="${SENTRY_KEV_TTL:-3600}"
 readonly MAX_BYTES=33554432
 
-source "$(dirname -- "${BASH_SOURCE[0]}")/_sentry-lib.sh"
+source "${BASH_SOURCE[0]%/*}/_sentry-lib.sh"
 
 die() {
-  jq -cn --arg m "$1" '{ok:false, source:"kev", error:$m}'
+  "$SENTRY_BIN_JQ" -cn --arg m "$1" '{ok:false, source:"kev", error:$m}'
   exit 0
 }
 
@@ -40,28 +40,28 @@ sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use
 needs_refresh() {
   [[ -s $CACHE_FILE ]] || return 0
   local now age
-  now=$(date +%s)
-  age=$((now - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
+  now=$("$SENTRY_BIN_DATE" +%s)
+  age=$((now - $("$SENTRY_BIN_STAT" -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
   (( age >= TTL ))
 }
 
 if [[ ${1:-} == --force ]] || needs_refresh; then
   tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
-  if curl -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
+  if "$SENTRY_BIN_CURL" -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
        "${SENTRY_CURL_HTTPS_ONLY[@]}" \
        -A "$UA" "$URL" -o "$tmp" 2>/dev/null &&
-     jq -e 'type=="object" and (.vulnerabilities | type=="array")' "$tmp" >/dev/null 2>&1; then
-    mv -f "$tmp" "$CACHE_FILE"
+     "$SENTRY_BIN_JQ" -e 'type=="object" and (.vulnerabilities | type=="array")' "$tmp" >/dev/null 2>&1; then
+    "$SENTRY_BIN_MV" -f "$tmp" "$CACHE_FILE"
   else
-    rm -f "$tmp"
+    "$SENTRY_BIN_RM" -f "$tmp"
     tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
-    if curl -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
+    if "$SENTRY_BIN_CURL" -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
          "${SENTRY_CURL_HTTPS_ONLY[@]}" \
          -A "$UA" "$MIRROR" -o "$tmp" 2>/dev/null &&
-       jq -e 'type=="object" and (.vulnerabilities | type=="array")' "$tmp" >/dev/null 2>&1; then
-      mv -f "$tmp" "$CACHE_FILE"
+       "$SENTRY_BIN_JQ" -e 'type=="object" and (.vulnerabilities | type=="array")' "$tmp" >/dev/null 2>&1; then
+      "$SENTRY_BIN_MV" -f "$tmp" "$CACHE_FILE"
     else
-      rm -f "$tmp"
+      "$SENTRY_BIN_RM" -f "$tmp"
     fi
   fi
 fi
@@ -71,7 +71,7 @@ sentry_safe_regular_file "$CACHE_FILE" || die "cache file is not safe to read"
 
 cutoff=""
 if [[ -n $RECENT_DAYS && $RECENT_DAYS =~ ^[0-9]+$ ]]; then
-  cutoff=$(date -u -d "$RECENT_DAYS days ago" +%Y-%m-%d 2>/dev/null || date -u -v-"$RECENT_DAYS"d +%Y-%m-%d 2>/dev/null || "")
+  cutoff=$("$SENTRY_BIN_DATE" -u -d "$RECENT_DAYS days ago" +%Y-%m-%d 2>/dev/null || "$SENTRY_BIN_DATE" -u -v-"$RECENT_DAYS"d +%Y-%m-%d 2>/dev/null || "")
 fi
 
 if [[ -n $cutoff ]]; then
@@ -80,7 +80,7 @@ else
   filter=".vulnerabilities[]"
 fi
 
-out=$(jq -c --arg cutoff "$cutoff" \
+out=$("$SENTRY_BIN_JQ" -c --arg cutoff "$cutoff" \
   '(.vulnerabilities // [])
      | map(select($cutoff == "" or (.dateAdded // "") >= $cutoff))
      | map({
@@ -97,5 +97,5 @@ out=$(jq -c --arg cutoff "$cutoff" \
 
 [[ -n $out ]] || die "CISA KEV catalog returned unparseable data"
 
-printf '%s' "$out" | jq -c --arg checked "$(date -u +%FT%TZ)" \
+printf '%s' "$out" | "$SENTRY_BIN_JQ" -c --arg checked "$("$SENTRY_BIN_DATE" -u +%FT%TZ)" \
   '{ok:true, source:"kev", count:length, checkedAt:$checked, vulnerabilities:.}'

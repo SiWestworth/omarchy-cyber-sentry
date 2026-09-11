@@ -20,10 +20,10 @@ readonly TTL="${SENTRY_EPSS_TTL:-86400}"
 readonly BATCH_SIZE=100
 readonly MAX_BYTES=4194304
 
-source "$(dirname -- "${BASH_SOURCE[0]}")/_sentry-lib.sh"
+source "${BASH_SOURCE[0]%/*}/_sentry-lib.sh"
 
 die() {
-  jq -cn --arg m "$1" '{ok:false, error:$m}'
+  "$SENTRY_BIN_JQ" -cn --arg m "$1" '{ok:false, error:$m}'
   exit 0
 }
 
@@ -38,17 +38,17 @@ if [[ $# -eq 0 ]]; then
   exploitdb_cache="$CACHE_DIR/exploitdb-matches.json"
 
   if sentry_safe_regular_file "$arch_cache"; then
-    cve_list+=$(jq -r '.[].issues[]? // empty' "$arch_cache" 2>/dev/null | tr '\n' ',')
+    cve_list+=$("$SENTRY_BIN_JQ" -r '.[].issues[]? // empty' "$arch_cache" 2>/dev/null | "$SENTRY_BIN_TR" '\n' ',')
   fi
   if sentry_safe_regular_file "$kev_cache"; then
-    cve_list+=$(jq -r '.vulnerabilities[]?.cveID // empty' "$kev_cache" 2>/dev/null | tr '\n' ',')
+    cve_list+=$("$SENTRY_BIN_JQ" -r '.vulnerabilities[]?.cveID // empty' "$kev_cache" 2>/dev/null | "$SENTRY_BIN_TR" '\n' ',')
   fi
   if sentry_safe_regular_file "$exploitdb_cache"; then
-    cve_list+=$(jq -r '.matches[]?.cve // empty' "$exploitdb_cache" 2>/dev/null | tr '\n' ',')
+    cve_list+=$("$SENTRY_BIN_JQ" -r '.matches[]?.cve // empty' "$exploitdb_cache" 2>/dev/null | "$SENTRY_BIN_TR" '\n' ',')
   fi
 
   # Deduplicate
-  cve_list=$(echo "$cve_list" | tr ',' '\n' | sort -u | grep -E '^CVE-[0-9]+-[0-9]+$' | tr '\n' ',')
+  cve_list=$(echo "$cve_list" | "$SENTRY_BIN_TR" ',' '\n' | "$SENTRY_BIN_SORT" -u | "$SENTRY_BIN_GREP" -E '^CVE-[0-9]+-[0-9]+$' | "$SENTRY_BIN_TR" '\n' ',')
   cve_list="${cve_list%,}"
 
   [[ -n $cve_list ]] || die "no CVEs to look up"
@@ -71,9 +71,9 @@ done
 scores="{}"
 for ((i=0; i<${#valid_cves[@]}; i+=BATCH_SIZE)); do
   batch=("${valid_cves[@]:$i:$BATCH_SIZE}")
-  payload=$(printf '%s\n' "${batch[@]}" | jq -R . | jq -sc '{cve: .}')
+  payload=$(printf '%s\n' "${batch[@]}" | "$SENTRY_BIN_JQ" -R . | "$SENTRY_BIN_JQ" -sc '{cve: .}')
 
-  raw=$(curl -fsSL --max-time 20 --max-filesize "$MAX_BYTES" \
+  raw=$("$SENTRY_BIN_CURL" -fsSL --max-time 20 --max-filesize "$MAX_BYTES" \
     "${SENTRY_CURL_HTTPS_ONLY[@]}" \
     -A "$UA" \
     -X POST "$URL" \
@@ -84,17 +84,17 @@ for ((i=0; i<${#valid_cves[@]}; i+=BATCH_SIZE)); do
     continue
   fi
 
-  batch_scores=$(printf '%s' "$raw" | jq -c '
+  batch_scores=$(printf '%s' "$raw" | "$SENTRY_BIN_JQ" -c '
     (.data // []) | map({(.cve): {epss: .epss, percentile: .percentile}}) | add // {}
   ' 2>/dev/null)
 
   if [[ -n $batch_scores ]]; then
-    scores=$(printf '%s' "$scores" "$batch_scores" | jq -sc '.[0] * .[1]')
+    scores=$(printf '%s' "$scores" "$batch_scores" | "$SENTRY_BIN_JQ" -sc '.[0] * .[1]')
   fi
 done
 
-count=$(printf '%s' "$scores" | jq 'length')
+count=$(printf '%s' "$scores" | "$SENTRY_BIN_JQ" 'length')
 [[ $count -gt 0 ]] || die "EPSS API returned no scores"
 
-printf '%s' "$scores" | jq -c --arg checked "$(date -u +%FT%TZ)" \
+printf '%s' "$scores" | "$SENTRY_BIN_JQ" -c --arg checked "$("$SENTRY_BIN_DATE" -u +%FT%TZ)" \
   '{ok:true, count:length, checkedAt:$checked, scores:.}'

@@ -23,10 +23,10 @@ readonly CACHE_FILE="$CACHE_DIR/arch-advisories.json"
 readonly TTL="${SENTRY_ARCH_TTL:-300}"
 readonly MAX_BYTES=8388608
 
-source "$(dirname -- "${BASH_SOURCE[0]}")/_sentry-lib.sh"
+source "${BASH_SOURCE[0]%/*}/_sentry-lib.sh"
 
 die() {
-  jq -cn --arg m "$1" '{ok:false, source:"arch", error:$m}'
+  "$SENTRY_BIN_JQ" -cn --arg m "$1" '{ok:false, source:"arch", error:$m}'
   exit 0
 }
 
@@ -35,26 +35,26 @@ sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use
 needs_refresh() {
   [[ -s $CACHE_FILE ]] || return 0
   local now age
-  now=$(date +%s)
-  age=$((now - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
+  now=$("$SENTRY_BIN_DATE" +%s)
+  age=$((now - $("$SENTRY_BIN_STAT" -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
   (( age >= TTL ))
 }
 
 if [[ ${1:-} == --force ]] || needs_refresh; then
   tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
-  if curl -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
+  if "$SENTRY_BIN_CURL" -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
        "${SENTRY_CURL_HTTPS_ONLY[@]}" \
        -A "$UA" "$URL" -o "$tmp" 2>/dev/null &&
-     jq -e 'type=="array"' "$tmp" >/dev/null 2>&1; then
-    mv -f "$tmp" "$CACHE_FILE"
+     "$SENTRY_BIN_JQ" -e 'type=="array"' "$tmp" >/dev/null 2>&1; then
+    "$SENTRY_BIN_MV" -f "$tmp" "$CACHE_FILE"
   else
-    rm -f "$tmp"
+    "$SENTRY_BIN_RM" -f "$tmp"
   fi
 fi
 
 [[ -s $CACHE_FILE ]] || die "Arch Security Tracker is unreachable"
 sentry_safe_regular_file "$CACHE_FILE" || die "cache file is not safe to read"
-jq -e 'type=="array"' "$CACHE_FILE" >/dev/null 2>&1 ||
+"$SENTRY_BIN_JQ" -e 'type=="array"' "$CACHE_FILE" >/dev/null 2>&1 ||
   die "Arch Security Tracker returned unparseable data"
 
 declare -A installed
@@ -64,7 +64,7 @@ while read -r name ver; do
     installed[$name]="$ver"
     ((installed_count++))
   fi
-done < <(pacman -Q 2>/dev/null)
+done < <("$SENTRY_BIN_PACMAN" -Q 2>/dev/null)
 
 [[ $installed_count -gt 0 ]] || die "pacman -Q returned no packages"
 
@@ -86,14 +86,14 @@ while IFS=$'\x1f' read -r adv pkg affectedver fixedver severity typ cvelist ref 
   affected=0
   if [[ -n $fixedver ]]; then
     fixed[$adv]=$fixedver
-    if rc=$(vercmp "$local_ver" "$fixedver" 2>/dev/null); then
+    if rc=$("$SENTRY_BIN_VERCMP" "$local_ver" "$fixedver" 2>/dev/null); then
       (( rc < 0 )) && affected=1
     else
       echo "warn: vercmp failed for $pkg ($local_ver vs $fixedver)" >&2
       affected=1
     fi
   elif [[ $status == "Vulnerable" && -n $affectedver ]]; then
-    if rc=$(vercmp "$local_ver" "$affectedver" 2>/dev/null); then
+    if rc=$("$SENTRY_BIN_VERCMP" "$local_ver" "$affectedver" 2>/dev/null); then
       if (( rc <= 0 )); then
         unfixed[$adv]=1
         affected=1
@@ -112,7 +112,7 @@ while IFS=$'\x1f' read -r adv pkg affectedver fixedver severity typ cvelist ref 
   refs[$adv]=$ref
   dates[$adv]=$date
   pkgs[$adv]+="${pkgs[$adv]:+;}$pkg=$local_ver"
-done < <(jq -r '.[] | . as $a | (($a.packages // []) | if length==0 then [""] else . end)[] | [
+done < <("$SENTRY_BIN_JQ" -r '.[] | . as $a | (($a.packages // []) | if length==0 then [""] else . end)[] | [
   $a.name, ., ($a.affected // ""), ($a.fixed // ""), ($a.severity // ""),
   ($a.type // ""), (($a.issues // []) | join("|")), ($a.reference // ""),
   ($a.issue_date // $a.date // ""), ($a.status // "")
@@ -125,7 +125,7 @@ out=$(
       "${sev[$adv]:-}" "${type[$adv]:-}" "${cves[$adv]:-}" "${dates[$adv]:-}" \
       "${refs[$adv]:-}"
   done |
-    jq -R -s '
+    "$SENTRY_BIN_JQ" -R -s '
       split("\n") | map(select(length > 0)) | map(
         split("\u001f") |
         {
@@ -142,9 +142,9 @@ out=$(
       )'
 )
 
-count=$(printf '%s' "$out" | jq 'length')
+count=$(printf '%s' "$out" | "$SENTRY_BIN_JQ" 'length')
 
-printf '%s' "$out" | jq -c --arg checked "$(date -u +%FT%TZ)" \
+printf '%s' "$out" | "$SENTRY_BIN_JQ" -c --arg checked "$("$SENTRY_BIN_DATE" -u +%FT%TZ)" \
   --argjson installed "$installed_count" \
   '{ok:true, source:"arch", count:length, checkedAt:$checked,
     installedChecked:$installed, advisories:.}'

@@ -490,9 +490,12 @@ Panel {
   Component.onCompleted: {
     configFile.reload()
     notifyStateFile.reload()
-    installedProcess.command = ["pacman", "-Q"]
+    // Absolute path, not ambient-PATH "pacman" — this drives the same
+    // installed-package correlation the fetch scripts' security checks
+    // depend on; a shadowed pacman would silently poison it.
+    installedProcess.command = ["/usr/bin/pacman", "-Q"]
     installedProcess.running = true
-    aurProcess.command = ["pacman", "-Qm"]
+    aurProcess.command = ["/usr/bin/pacman", "-Qm"]
     aurProcess.running = true
     refreshTimer.start()
     refresh()

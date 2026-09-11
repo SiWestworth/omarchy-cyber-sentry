@@ -76,6 +76,11 @@ EOF
 export FAKE_INSTALLED=$'mypkg 1.0-1\nepkg 2:1.0-1\npkg2 1.0-2\na 1.5-1\nb 2.0-1'
 export XDG_RUNTIME_DIR="$env/cache"
 export PATH="$env/bin:$PATH"
+# arch-fetch resolves pacman via a hardcoded absolute path (not ambient
+# PATH) for security, so the PATH prepend above no longer reaches it — this
+# explicit test-only seam (see _sentry-lib.sh) is what actually redirects
+# it to the mock.
+export SENTRY_TEST_PACMAN="$env/bin/pacman"
 
 arch_out=$(./arch-fetch)
 arch_json=$(jq -c . <<<"$arch_out")
@@ -313,7 +318,7 @@ else
   echo "  SKIP  SentryModel.js (node unavailable)"
 fi
 
-unset XDG_RUNTIME_DIR PATH FAKE_INSTALLED
+unset XDG_RUNTIME_DIR PATH FAKE_INSTALLED SENTRY_TEST_PACMAN
 export XDG_RUNTIME_DIR="$old_runtime"
 export PATH="$old_path"
 export FAKE_INSTALLED="$old_fake"
