@@ -20,6 +20,9 @@ readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
 readonly CACHE_FILE="$CACHE_DIR/alerts-cache.xml"
 readonly JSON_CACHE="$CACHE_DIR/alerts-parsed.json"
 readonly TTL="${SENTRY_ALERTS_TTL:-7200}"
+readonly MAX_BYTES=8388608
+
+source "$(dirname -- "${BASH_SOURCE[0]}")/_sentry-lib.sh"
 
 die() {
   jq -cn --arg m "$1" '{ok:false, source:"alerts", error:$m}'
@@ -32,7 +35,9 @@ if [[ ${1:-} == "--days" && -n ${2:-} ]]; then
   shift 2
 fi
 
-mkdir -p "$CACHE_DIR" 2>/dev/null
+sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use"
+
+mktmp() { sentry_mktemp "$CACHE_DIR" || die "could not create a secure temp file"; }
 
 needs_refresh() {
   [[ -s $JSON_CACHE ]] || return 0
@@ -43,8 +48,10 @@ needs_refresh() {
 }
 
 if [[ ${1:-} == "--force" ]] || needs_refresh; then
-  tmp="$CACHE_FILE.tmp.$$"
-  if curl -fsSL --max-time 25 -A "$UA" "$URL" -o "$tmp" 2>/dev/null; then
+  tmp=$(mktmp)
+  if curl -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
+       "${SENTRY_CURL_HTTPS_ONLY[@]}" \
+       -A "$UA" "$URL" -o "$tmp" 2>/dev/null; then
     if xmllint --noout "$tmp" 2>/dev/null; then
       mv -f "$tmp" "$CACHE_FILE"
     else
@@ -57,23 +64,28 @@ if [[ ${1:-} == "--force" ]] || needs_refresh; then
   # Parse XML to JSON. The NCSC RSS has multi-line <description> blocks
   # that break field-separator approaches, so we extract each field
   # separately with xmlstarlet and zip them together with paste.
-  if [[ -s $CACHE_FILE ]]; then
+  if sentry_safe_regular_file "$CACHE_FILE"; then
     cutoff=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || \
              date -u -v-"${DAYS}"d +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "")
 
+    titles_tmp=$(mktmp)
+    links_tmp=$(mktmp)
+    dates_tmp=$(mktmp)
+    json_tmp=$(mktmp)
+
     # Extract each field into separate newline-delimited files
     xmlstarlet sel -t -m "//item" -v "title" -n "$CACHE_FILE" 2>/dev/null \
-      | sed 's/^  *//' > "$CACHE_DIR/_titles.txt"
+      | sed 's/^  *//' > "$titles_tmp"
     xmlstarlet sel -t -m "//item" -v "link" -n "$CACHE_FILE" 2>/dev/null \
-      | sed 's/^  *//' > "$CACHE_DIR/_links.txt"
+      | sed 's/^  *//' > "$links_tmp"
     xmlstarlet sel -t -m "//item" -v "pubDate" -n "$CACHE_FILE" 2>/dev/null \
-      | sed 's/^  *//' > "$CACHE_DIR/_dates.txt"
+      | sed 's/^  *//' > "$dates_tmp"
 
     # Combine fields: paste joins by \t, jq splits and builds JSON
     paste -d$'\t' \
-      "$CACHE_DIR/_titles.txt" \
-      "$CACHE_DIR/_links.txt" \
-      "$CACHE_DIR/_dates.txt" | \
+      "$titles_tmp" \
+      "$links_tmp" \
+      "$dates_tmp" | \
     while IFS=$'\t' read -r title link pubDate; do
       [[ -n $title ]] || continue
 
@@ -94,12 +106,14 @@ if [[ ${1:-} == "--force" ]] || needs_refresh; then
     done | \
     jq -Rc 'split("\t") | {title: .[0], link: .[1], date: .[2]}' | \
     jq -sc --arg checked "$(date -u +%FT%TZ)" \
-      '{ok:true, source:"alerts", count:length, checkedAt:$checked, advisories:.}' > "$JSON_CACHE" 2>/dev/null
+      '{ok:true, source:"alerts", count:length, checkedAt:$checked, advisories:.}' > "$json_tmp" 2>/dev/null
 
-    rm -f "$CACHE_DIR/_titles.txt" "$CACHE_DIR/_links.txt" "$CACHE_DIR/_dates.txt"
+    [[ -s $json_tmp ]] && mv -f "$json_tmp" "$JSON_CACHE"
+    rm -f "$titles_tmp" "$links_tmp" "$dates_tmp" "$json_tmp"
   fi
 fi
 
 [[ -s $JSON_CACHE ]] || die "NCSC-NL advisory feed is unavailable or unparseable"
+sentry_safe_regular_file "$JSON_CACHE" || die "cache file is not safe to read"
 
 cat "$JSON_CACHE"

@@ -19,6 +19,9 @@ readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
 readonly CACHE_FILE="$CACHE_DIR/nvd-recent.json"
 readonly TTL="${SENTRY_NVD_TTL:-3600}"
 readonly MAX_RESULTS=200
+readonly MAX_BYTES=8388608
+
+source "$(dirname -- "${BASH_SOURCE[0]}")/_sentry-lib.sh"
 
 die() {
   jq -cn --arg m "$1" '{ok:false, source:"nvd", error:$m}'
@@ -31,7 +34,7 @@ if [[ ${1:-} == "--days" && -n ${2:-} ]]; then
   shift 2
 fi
 
-mkdir -p "$CACHE_DIR" 2>/dev/null
+sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use"
 
 needs_refresh() {
   [[ -s $CACHE_FILE ]] || return 0
@@ -48,14 +51,16 @@ if [[ ${1:-} == "--force" ]] || needs_refresh; then
 
   [[ -n $start_date && -n $end_date ]] || die "could not compute date range"
 
-  tmp="$CACHE_FILE.tmp.$$"
+  tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
 
   # Fetch both HIGH and CRITICAL
   all_results="[]"
   for severity in HIGH CRITICAL; do
     url="${BASE_URL}?pubStartDate=${start_date}&pubEndDate=${end_date}&cvssV3Severity=${severity}&resultsPerPage=${MAX_RESULTS}"
 
-    raw=$(curl -fsSL --max-time 30 -A "$UA" "$url" 2>/dev/null)
+    raw=$(curl -fsSL --max-time 30 --max-filesize "$MAX_BYTES" \
+      "${SENTRY_CURL_HTTPS_ONLY[@]}" \
+      -A "$UA" "$url" 2>/dev/null)
 
     if [[ -n $raw ]]; then
       batch=$(printf '%s' "$raw" | jq -c '
@@ -92,6 +97,7 @@ if [[ ${1:-} == "--force" ]] || needs_refresh; then
 fi
 
 [[ -s $CACHE_FILE ]] || die "NVD cache is empty"
+sentry_safe_regular_file "$CACHE_FILE" || die "cache file is not safe to read"
 
 jq -e 'type=="object" and (.cves | type=="array")' "$CACHE_FILE" >/dev/null 2>&1 ||
   die "NVD cache contains unparseable data"

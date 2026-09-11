@@ -20,6 +20,9 @@ readonly UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0"
 readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
 readonly CACHE_FILE="$CACHE_DIR/kev-catalog.json"
 readonly TTL="${SENTRY_KEV_TTL:-3600}"
+readonly MAX_BYTES=33554432
+
+source "$(dirname -- "${BASH_SOURCE[0]}")/_sentry-lib.sh"
 
 die() {
   jq -cn --arg m "$1" '{ok:false, source:"kev", error:$m}'
@@ -32,7 +35,7 @@ if [[ ${1:-} == --recent-days && -n ${2:-} ]]; then
   shift 2
 fi
 
-mkdir -p "$CACHE_DIR" 2>/dev/null
+sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use"
 
 needs_refresh() {
   [[ -s $CACHE_FILE ]] || return 0
@@ -43,13 +46,18 @@ needs_refresh() {
 }
 
 if [[ ${1:-} == --force ]] || needs_refresh; then
-  tmp="$CACHE_FILE.tmp.$$"
-  if curl -fsSL --max-time 25 -A "$UA" "$URL" -o "$tmp" 2>/dev/null &&
+  tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
+  if curl -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
+       "${SENTRY_CURL_HTTPS_ONLY[@]}" \
+       -A "$UA" "$URL" -o "$tmp" 2>/dev/null &&
      jq -e 'type=="object" and (.vulnerabilities | type=="array")' "$tmp" >/dev/null 2>&1; then
     mv -f "$tmp" "$CACHE_FILE"
   else
     rm -f "$tmp"
-    if curl -fsSL --max-time 25 -A "$UA" "$MIRROR" -o "$tmp" 2>/dev/null &&
+    tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
+    if curl -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
+         "${SENTRY_CURL_HTTPS_ONLY[@]}" \
+         -A "$UA" "$MIRROR" -o "$tmp" 2>/dev/null &&
        jq -e 'type=="object" and (.vulnerabilities | type=="array")' "$tmp" >/dev/null 2>&1; then
       mv -f "$tmp" "$CACHE_FILE"
     else
@@ -59,6 +67,7 @@ if [[ ${1:-} == --force ]] || needs_refresh; then
 fi
 
 [[ -s $CACHE_FILE ]] || die "CISA KEV catalog is unreachable"
+sentry_safe_regular_file "$CACHE_FILE" || die "cache file is not safe to read"
 
 cutoff=""
 if [[ -n $RECENT_DAYS && $RECENT_DAYS =~ ^[0-9]+$ ]]; then

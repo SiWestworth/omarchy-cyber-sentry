@@ -18,13 +18,16 @@ readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
 readonly CACHE_FILE="$CACHE_DIR/epss-cache.json"
 readonly TTL="${SENTRY_EPSS_TTL:-86400}"
 readonly BATCH_SIZE=100
+readonly MAX_BYTES=4194304
+
+source "$(dirname -- "${BASH_SOURCE[0]}")/_sentry-lib.sh"
 
 die() {
   jq -cn --arg m "$1" '{ok:false, error:$m}'
   exit 0
 }
 
-mkdir -p "$CACHE_DIR" 2>/dev/null
+sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use"
 
 # If no args, try to read CVE list from a cached helper file
 if [[ $# -eq 0 ]]; then
@@ -34,13 +37,13 @@ if [[ $# -eq 0 ]]; then
   kev_cache="$CACHE_DIR/kev-catalog.json"
   exploitdb_cache="$CACHE_DIR/exploitdb-matches.json"
 
-  if [[ -s $arch_cache ]]; then
+  if sentry_safe_regular_file "$arch_cache"; then
     cve_list+=$(jq -r '.[].issues[]? // empty' "$arch_cache" 2>/dev/null | tr '\n' ',')
   fi
-  if [[ -s $kev_cache ]]; then
+  if sentry_safe_regular_file "$kev_cache"; then
     cve_list+=$(jq -r '.vulnerabilities[]?.cveID // empty' "$kev_cache" 2>/dev/null | tr '\n' ',')
   fi
-  if [[ -s $exploitdb_cache ]]; then
+  if sentry_safe_regular_file "$exploitdb_cache"; then
     cve_list+=$(jq -r '.matches[]?.cve // empty' "$exploitdb_cache" 2>/dev/null | tr '\n' ',')
   fi
 
@@ -70,7 +73,9 @@ for ((i=0; i<${#valid_cves[@]}; i+=BATCH_SIZE)); do
   batch=("${valid_cves[@]:$i:$BATCH_SIZE}")
   payload=$(printf '%s\n' "${batch[@]}" | jq -R . | jq -sc '{cve: .}')
 
-  raw=$(curl -fsSL --max-time 20 -A "$UA" \
+  raw=$(curl -fsSL --max-time 20 --max-filesize "$MAX_BYTES" \
+    "${SENTRY_CURL_HTTPS_ONLY[@]}" \
+    -A "$UA" \
     -X POST "$URL" \
     -H "Content-Type: application/json" \
     -d "$payload" 2>/dev/null)
