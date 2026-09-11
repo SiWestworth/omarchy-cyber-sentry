@@ -52,7 +52,16 @@ if [[ ${1:-} == "--force" ]] || needs_refresh; then
   if "$SENTRY_BIN_CURL" -fsSL --max-time 25 --max-filesize "$MAX_BYTES" \
        "${SENTRY_CURL_HTTPS_ONLY[@]}" \
        -A "$UA" "$URL" -o "$tmp" 2>/dev/null; then
-    if "$SENTRY_BIN_XMLLINT" --noout "$tmp" 2>/dev/null; then
+    # Reject outright rather than parse: a real RSS feed never declares a
+    # DOCTYPE, and xmlstarlet/xmllint resolve local file:// external
+    # entities by default regardless of any --net-style flag (--net only
+    # gates network fetches) — confirmed empirically, not assumed. A
+    # compromised or hijacked feed could otherwise disclose local files
+    # into the extracted title/link text. Checked before well-formedness
+    # so a malicious payload never reaches xmllint/xmlstarlet at all.
+    if "$SENTRY_BIN_GREP" -qi '<!DOCTYPE' "$tmp"; then
+      "$SENTRY_BIN_RM" -f "$tmp"
+    elif "$SENTRY_BIN_XMLLINT" --noout "$tmp" 2>/dev/null; then
       "$SENTRY_BIN_MV" -f "$tmp" "$CACHE_FILE"
     else
       "$SENTRY_BIN_RM" -f "$tmp"
