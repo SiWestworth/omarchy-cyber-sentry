@@ -1,0 +1,85 @@
+#!/bin/bash
+
+# CLI companion for the cyber.sentry Omarchy plugin.
+#
+# Usage: cyber-sentry-status
+#
+# Runs the same fetch scripts the panel uses (each already TTL-caches and
+# hardens its own network call — see _sentry-lib.sh), then prints a
+# colorized terminal summary. Does not reimplement any curl/cache logic.
+
+set -uo pipefail
+
+DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+cd "$DIR" || exit 1
+
+source "$DIR/_sentry-lib.sh"
+
+readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
+
+bold=$("$SENTRY_BIN_TPUT" bold 2>/dev/null || true)
+dim=$("$SENTRY_BIN_TPUT" dim 2>/dev/null || true)
+red=$("$SENTRY_BIN_TPUT" setaf 1 2>/dev/null || true)
+yellow=$("$SENTRY_BIN_TPUT" setaf 3 2>/dev/null || true)
+green=$("$SENTRY_BIN_TPUT" setaf 2 2>/dev/null || true)
+reset=$("$SENTRY_BIN_TPUT" sgr0 2>/dev/null || true)
+
+echo "${bold}Cyber Sentry — status${reset}"
+echo
+
+arch_json=$("$DIR/arch-fetch")
+kev_json=$("$DIR/kev-fetch" --recent-days 90)
+nvd_json=$("$DIR/nvd-fetch")
+alerts_json=$("$DIR/alerts-fetch")
+
+arch_ok=$("$SENTRY_BIN_JQ" -r '.ok' <<<"$arch_json")
+kev_ok=$("$SENTRY_BIN_JQ" -r '.ok' <<<"$kev_json")
+nvd_ok=$("$SENTRY_BIN_JQ" -r '.ok' <<<"$nvd_json")
+alerts_ok=$("$SENTRY_BIN_JQ" -r '.ok' <<<"$alerts_json")
+
+if [[ $arch_ok == "true" ]]; then
+  arch_count=$("$SENTRY_BIN_JQ" -r '.count' <<<"$arch_json")
+  color=$([[ $arch_count -gt 0 ]] && echo "$red" || echo "$green")
+  echo "${color}${arch_count} advisories${reset} affect installed packages (Arch Security Tracker)"
+else
+  echo "${yellow}Arch Security Tracker: $("$SENTRY_BIN_JQ" -r '.error' <<<"$arch_json")${reset}"
+fi
+
+if [[ $kev_ok == "true" ]]; then
+  kev_count=$("$SENTRY_BIN_JQ" -r '.count' <<<"$kev_json")
+  echo "${bold}${kev_count} known-exploited CVEs${reset} added in the last 90 days (CISA KEV)"
+else
+  echo "${yellow}CISA KEV: $("$SENTRY_BIN_JQ" -r '.error' <<<"$kev_json")${reset}"
+fi
+
+if [[ $nvd_ok == "true" ]]; then
+  nvd_count=$("$SENTRY_BIN_JQ" -r '.count' <<<"$nvd_json")
+  echo "${nvd_count} recent High/Critical CVEs (NVD)"
+else
+  echo "${yellow}NVD: $("$SENTRY_BIN_JQ" -r '.error' <<<"$nvd_json")${reset}"
+fi
+
+if [[ $alerts_ok == "true" ]]; then
+  alerts_count=$("$SENTRY_BIN_JQ" -r '.count' <<<"$alerts_json")
+  echo "${alerts_count} vendor advisories (NCSC-NL)"
+else
+  echo "${yellow}NCSC-NL alerts: $("$SENTRY_BIN_JQ" -r '.error' <<<"$alerts_json")${reset}"
+fi
+
+if [[ $arch_ok == "true" ]]; then
+  echo
+  echo "${bold}Top affected packages:${reset}"
+  "$SENTRY_BIN_JQ" -r '.advisories | sort_by(-({"Critical":3,"High":2,"Medium":1,"Low":0}[.severity] // -1)) | .[:5][] |
+    "  " + .severity + "  " + .packages + (if .fixed != "" then "  (fix " + .fixed + ")" else "  (no fix released)" end)' \
+    <<<"$arch_json"
+fi
+
+echo
+echo "${dim}Cache freshness:${reset}"
+for f in arch-advisories.json kev-catalog.json nvd-recent.json alerts-parsed.json; do
+  path="$CACHE_DIR/$f"
+  if sentry_safe_regular_file "$path"; then
+    age=$(( $("$SENTRY_BIN_DATE" +%s) - $("$SENTRY_BIN_STAT" -c %Y "$path" 2>/dev/null || echo 0) ))
+    echo "  ${dim}$f: ${age}s ago${reset}"
+  fi
+done

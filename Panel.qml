@@ -12,6 +12,9 @@ import "SentryModel.js" as SentryModel
 //
 // v2.0: added NVD Recent, Alerts, EPSS, ExploitDB, KEV-installed
 // correlation, bootstrap notification suppression, recency filters.
+// v2.2: added an exposure-trend sparkline, a CVE watchlist, a weekly
+// digest notification, theme-derived severity colors, a do-not-disturb
+// notification schedule, and the cyber-sentry-status CLI companion.
 
 Panel {
   id: root
@@ -41,9 +44,14 @@ Panel {
   readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy/settings"
   readonly property string configPath: stateDir + "/cyber-sentry.json"
   readonly property string notifyStatePath: stateDir + "/cyber-sentry-state.json"
+  readonly property string historyPath: stateDir + "/cyber-sentry-history.json"
+  readonly property int historyMaxPoints: 200
+  readonly property int historyMinIntervalMs: 5 * 60000
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color accentColor: Color.accent
+  readonly property color mutedColor: Color.muted
   readonly property color dim: Qt.darker(foreground, 1.45)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -66,6 +74,12 @@ Panel {
   readonly property bool showKevBadge: setting("showKevBadge", false)
   readonly property int kevRecentDays: Math.round(SentryModel.clamp(setting("kevRecentDays", 90), 0, 365, 90))
   readonly property bool kevAffectsMeOnly: setting("kevAffectsMeOnly", false)
+  readonly property bool showTrend: setting("showTrend", true)
+  readonly property bool digestEnabled: setting("digestEnabled", true)
+  readonly property int digestIntervalDays: Math.round(SentryModel.clamp(setting("digestIntervalDays", 7), 1, 30, 7))
+  readonly property bool dndEnabled: setting("dndEnabled", false)
+  readonly property string dndStart: String(setting("dndStart", "22:00"))
+  readonly property string dndEnd: String(setting("dndEnd", "07:00"))
 
   // --- live state -----------------------------------------------------------
   property var archParsed: null
@@ -87,7 +101,10 @@ Panel {
   property bool epssFetching: false
   property bool exploitdbFetching: false
   property var notified: ({})
+  property real lastDigestAt: 0
   property bool stateLoaded: false
+  property var history: []
+  property bool historyLoaded: false
   property bool bootstrapDone: false
   property int activeTab: 0  // 0=System, 1=Exploited, 2=Recent, 3=Alerts
   property string cveDetailTitle: ""
@@ -155,8 +172,22 @@ Panel {
     return r
   }
 
+  readonly property var watchlist: {
+    var w = conf("watchlist", [])
+    return Array.isArray(w) ? w : []
+  }
+
+  function toggleWatch(cveId) {
+    if (!cveId) return
+    var next = watchlist.slice()
+    var idx = next.indexOf(cveId)
+    if (idx >= 0) next.splice(idx, 1)
+    else next.push(cveId)
+    saveConfig({ watchlist: next })
+  }
+
   readonly property var systemRows: SentryModel.sortBySeverity(
-    SentryModel.filterByThreshold(SentryModel.archRows(enrichedRows), severityThreshold)
+    SentryModel.filterByThresholdOrWatched(SentryModel.archRows(enrichedRows), severityThreshold, watchlist)
   ).slice(0, maxItems)
   readonly property var kevFiltered: {
     var kRows = SentryModel.kevRows(enrichedRows)
@@ -165,7 +196,7 @@ Panel {
     return SentryModel.sortByDateDesc(kRows).slice(0, maxItems)
   }
   readonly property var nvdRows: SentryModel.sortBySeverity(
-    SentryModel.filterByThreshold(SentryModel.nvdRows(enrichedRows), severityThreshold)
+    SentryModel.filterByThresholdOrWatched(SentryModel.nvdRows(enrichedRows), severityThreshold, watchlist)
   ).slice(0, maxItems)
   readonly property var alertRows: SentryModel.sortByDateDesc(SentryModel.alertRows(enrichedRows)).slice(0, maxItems)
 
@@ -175,12 +206,19 @@ Panel {
   readonly property int totalBadge: showKevBadge ? badgeCount + kevCount : badgeCount
   readonly property bool badgeVisible: showBadge && totalBadge > 0 && !paused
 
+  // Theme-derived severity colors, following the same idiom Omarchy's own
+  // notification cards use for collapsing more urgency levels than the
+  // theme has distinct tokens for: the alarm color (urgent) at full and
+  // reduced alpha for the two most severe tiers, then accent/muted for the
+  // remaining two. Omarchy has no danger/warning/success scale — only
+  // foreground/background/accent/urgent/muted — so this is a deliberate
+  // choice, not a stand-in for a "real" 4-hue palette that doesn't exist.
   function severityColor(sev) {
     switch (SentryModel.severityKey(sev)) {
-      case "critical": return "#e5484d"
-      case "high": return "#f76b15"
-      case "medium": return "#ffb020"
-      case "low": return "#0091ff"
+      case "critical": return urgent
+      case "high": return Qt.rgba(urgent.r, urgent.g, urgent.b, 0.7)
+      case "medium": return accentColor
+      case "low": return mutedColor
       default: return dim
     }
   }
@@ -285,6 +323,32 @@ Panel {
       epssProcess.command = [epssPath]
       epssProcess.running = true
     }
+    checkDigest()
+    recordHistoryPoint()
+  }
+
+  // --- weekly digest ----------------------------------------------------
+  function checkDigest() {
+    if (!digestEnabled || !stateLoaded) return
+    var now = Date.now()
+    if (lastDigestAt === 0) {
+      // First run: establish a baseline rather than firing immediately —
+      // same bootstrap-suppression idea used for regular notifications.
+      lastDigestAt = now
+      saveNotifyState()
+      return
+    }
+    if (now - lastDigestAt < digestIntervalDays * 86400000) return
+
+    var parts = []
+    if (badgeCount > 0) parts.push(badgeCount + " affected")
+    if (kevCount > 0) parts.push(kevCount + " exploited")
+    if (nvdRows.length > 0) parts.push(nvdRows.length + " recent CVE")
+    var body = parts.length > 0 ? parts.join(" · ") : "No threats matching your threshold — you are up to date"
+
+    lastDigestAt = now
+    saveNotifyState()
+    sendNotification("Cyber Sentry — " + digestIntervalDays + "-day digest", body, false)
   }
 
   function applyArch(exitCode, out, err) {
@@ -428,6 +492,10 @@ Panel {
   }
 
   function sendNotification(headline, body, isUrgent) {
+    // DND suppresses the OS popup only — notified-state above is already
+    // updated by the caller regardless, so ending the window doesn't cause
+    // a backlog flood, and the badge/panel keep reflecting live data.
+    if (dndEnabled && SentryModel.isWithinDnd(dndStart, dndEnd, new Date())) return
     notificationProcess.running = false
     notificationProcess.command = ["omarchy-notification-send", "-a", "--app-name", "sentry",
       "-u", isUrgent ? "critical" : "normal", "-g", shieldGlyph, headline, body]
@@ -438,13 +506,32 @@ Panel {
     var parsed
     try { parsed = JSON.parse(String(raw || "{}")) } catch (e) { parsed = {} }
     notified = (parsed && typeof parsed === "object" && parsed.notified) ? parsed.notified : ({})
+    lastDigestAt = (parsed && typeof parsed === "object" && parsed.lastDigestAt) ? Number(parsed.lastDigestAt) || 0 : 0
     stateLoaded = true
   }
 
   function saveNotifyState() {
     if (!stateLoaded) return
     SentryModel.pruneNotified(notified, 7 * 86400000)
-    notifyStateFile.setText(JSON.stringify({ notified: notified }, null, 2) + "\n")
+    notifyStateFile.setText(JSON.stringify({ notified: notified, lastDigestAt: lastDigestAt }, null, 2) + "\n")
+  }
+
+  // --- trend history ------------------------------------------------------
+  function applyHistory(raw) {
+    var parsed
+    try { parsed = JSON.parse(String(raw || "[]")) } catch (e) { parsed = [] }
+    history = Array.isArray(parsed) ? parsed : []
+    historyLoaded = true
+  }
+
+  function recordHistoryPoint() {
+    if (!historyLoaded || !initialized) return
+    var last = history.length > 0 ? history[history.length - 1] : null
+    var now = Date.now()
+    if (last && now - new Date(last.t).getTime() < historyMinIntervalMs) return
+    history = SentryModel.appendHistoryPoint(
+      history, { t: new Date(now).toISOString(), badgeCount: badgeCount, kevCount: kevCount }, historyMaxPoints)
+    historyFile.setText(JSON.stringify(history) + "\n")
   }
 
   // --- cve.org detail on demand ---------------------------------------------
@@ -490,6 +577,7 @@ Panel {
   Component.onCompleted: {
     configFile.reload()
     notifyStateFile.reload()
+    historyFile.reload()
     // Absolute path, not ambient-PATH "pacman" — this drives the same
     // installed-package correlation the fetch scripts' security checks
     // depend on; a shadowed pacman would silently poison it.
@@ -538,6 +626,16 @@ Panel {
     printErrors: false
     onLoaded: root.applyNotifyState(text())
     onLoadFailed: root.applyNotifyState("{}")
+  }
+
+  FileView {
+    id: historyFile
+    path: root.historyPath
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.applyHistory(text())
+    onLoadFailed: root.applyHistory("[]")
   }
 
   // --- background processes ---------------------------------------------------
@@ -767,6 +865,25 @@ Panel {
                   fontFamily: root.fontFamily
                 }
               }
+            }
+          }
+
+          Sparkline {
+            id: trendSparkline
+            visible: root.showTrend && root.history.length >= 2
+            width: parent.width
+            height: Style.space(28)
+            points: SentryModel.sparklinePoints(root.history, width, height, 3)
+            lineColor: root.accentColor
+            PanelToolTip {
+              visible: trendSparklineArea.containsMouse
+              text: "Affected-package count over time"
+              fontFamily: root.fontFamily
+            }
+            MouseArea {
+              id: trendSparklineArea
+              anchors.fill: parent
+              hoverEnabled: true
             }
           }
 
@@ -1336,6 +1453,50 @@ Panel {
     }
   }
 
+  component Sparkline: Canvas {
+    id: sparklineCanvas
+    property var points: []
+    property color lineColor: root.accentColor
+
+    onPointsChanged: requestPaint()
+    onLineColorChanged: requestPaint()
+    onWidthChanged: requestPaint()
+    onHeightChanged: requestPaint()
+
+    onPaint: {
+      var ctx = getContext("2d")
+      ctx.reset()
+      if (points.length < 2) return
+      ctx.strokeStyle = lineColor
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.moveTo(points[0].x, points[0].y)
+      for (var i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y)
+      ctx.stroke()
+    }
+  }
+
+  // Pin/unpin toggle for the CVE watchlist. Shown on rows that carry a CVE
+  // id; hidden entirely (via `visible`, set by the caller) where there's
+  // nothing to watch.
+  component WatchStar: Text {
+    id: watchStar
+    property bool watched: false
+    signal toggled()
+
+    text: watched ? "★" : "☆"
+    color: watched ? root.urgent : root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+
+    MouseArea {
+      anchors.fill: parent
+      anchors.margins: -Style.space(3)
+      cursorShape: Qt.PointingHandCursor
+      onClicked: watchStar.toggled()
+    }
+  }
+
   component EpssBadge: Rectangle {
     property string epssValue: ""
     visible: root.epssEnabled && epssValue !== ""
@@ -1434,7 +1595,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
-          width: parent.width - archSevLabel.implicitWidth - archEdbTag.implicitWidth - archEpssBadge.implicitWidth - Style.space(16)
+          width: parent.width - archSevLabel.implicitWidth - archEdbTag.implicitWidth - archEpssBadge.implicitWidth - archWatchStar.implicitWidth - Style.space(20)
           elide: Text.ElideRight
           text: modelData.id
           color: root.foreground
@@ -1463,6 +1624,13 @@ Panel {
           id: archEdbTag
           anchors.verticalCenter: parent.verticalCenter
           titles: modelData.exploitTitles || []
+        }
+
+        WatchStar {
+          id: archWatchStar
+          anchors.verticalCenter: parent.verticalCenter
+          watched: SentryModel.isWatched(modelData, root.watchlist)
+          onToggled: root.toggleWatch(SentryModel.firstCve(modelData))
         }
       }
 
@@ -1533,7 +1701,7 @@ Panel {
         spacing: Style.space(6)
 
         Text {
-          width: parent.width - kevRansomLabel.implicitWidth - kevInstalledTag.implicitWidth - kevEpssBadge.implicitWidth - kevEdbTag.implicitWidth - Style.space(12)
+          width: parent.width - kevRansomLabel.implicitWidth - kevInstalledTag.implicitWidth - kevEpssBadge.implicitWidth - kevEdbTag.implicitWidth - kevWatchStar.implicitWidth - Style.space(16)
           elide: Text.ElideRight
           text: modelData.id
           color: root.foreground
@@ -1569,6 +1737,13 @@ Panel {
           id: kevEdbTag
           anchors.verticalCenter: parent.verticalCenter
           titles: modelData.exploitTitles || []
+        }
+
+        WatchStar {
+          id: kevWatchStar
+          anchors.verticalCenter: parent.verticalCenter
+          watched: SentryModel.isWatched(modelData, root.watchlist)
+          onToggled: root.toggleWatch(SentryModel.firstCve(modelData))
         }
       }
 
@@ -1642,7 +1817,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
-          width: parent.width - nvdSevLabel.implicitWidth - nvdScoreLabel.implicitWidth - nvdEpssBadge.implicitWidth - nvdEdbTag.implicitWidth - Style.space(16)
+          width: parent.width - nvdSevLabel.implicitWidth - nvdScoreLabel.implicitWidth - nvdEpssBadge.implicitWidth - nvdEdbTag.implicitWidth - nvdWatchStar.implicitWidth - Style.space(20)
           elide: Text.ElideRight
           text: modelData.id
           color: root.foreground
@@ -1681,6 +1856,13 @@ Panel {
           id: nvdEdbTag
           anchors.verticalCenter: parent.verticalCenter
           titles: modelData.exploitTitles || []
+        }
+
+        WatchStar {
+          id: nvdWatchStar
+          anchors.verticalCenter: parent.verticalCenter
+          watched: SentryModel.isWatched(modelData, root.watchlist)
+          onToggled: root.toggleWatch(SentryModel.firstCve(modelData))
         }
       }
 
