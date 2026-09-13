@@ -4,6 +4,13 @@ A [Quickshell](https://quickshell.outfoxxed.me/) / [Omarchy](https://omarchy.org
 
 It correlates live security data against the packages actually installed on this machine (`pacman -Q`) and shows you what matters — not noise.
 
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/exploited-tab.png" width="380" alt="Exploited tab: CISA KEV entries with EPSS exploit-probability scores">
+  <img src="screenshots/recent-cve-tab.png" width="380" alt="Recent tab: high/critical NVD CVEs with CVSS scores">
+</p>
+
 ## What it watches
 
 | Source | What it tells you |
