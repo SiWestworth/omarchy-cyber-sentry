@@ -75,10 +75,20 @@ turned off in settings.
 
 ## CVE watchlist
 
-Click the star next to any Arch/KEV/NVD row to pin it. Watchlisted CVEs
+Click the star next to any Arch/KEV/NVD/Dev row to pin it. Watchlisted CVEs
 always show in their tab regardless of your severity threshold, so you can
 track something you care about (a package you run in production, say)
 without lowering the threshold for everything else.
+
+## Snooze / dismiss
+
+Click the **✕** next to any row to dismiss it — for a CVE you've assessed
+and don't need to see again. Unlike the watchlist, dismissal is unconditional:
+a dismissed CVE disappears from every tab it could appear in, not just
+below a threshold, and it beats a watchlist pin if a CVE is somehow both.
+Since a dismissed row is gone from the UI, there's no per-item undo — a
+"N dismissed · Clear" control appears near the refresh button whenever
+anything is dismissed, to bring everything back at once.
 
 ## Weekly digest
 

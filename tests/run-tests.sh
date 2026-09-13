@@ -239,6 +239,20 @@ model_test=$(node -e "
   const thresholdRows = [watchRow, mod.archRow({name:'AVG-98',severity:'Low',packages:'q',fixed:'1.0',cves:['CVE-2026-9998'],date:'2026-01-01'})];
   const filteredKeptIds = mod.filterByThresholdOrWatched(thresholdRows, 'High', watchlist).map(function(r){return r.id}).join(',');
 
+  // --- dismiss ---
+  const dismissRow = mod.archRow({name:'AVG-97',severity:'Critical',packages:'r',fixed:'1.0',cves:['CVE-2026-9997'],date:'2026-01-01'});
+  const dismissedList = ['CVE-2026-9997'];
+  const isDismissedTrue = mod.isDismissed(dismissRow, dismissedList);
+  const isDismissedFalse = mod.isDismissed(dismissRow, []);
+  const dismissKeptIds = mod.filterOutDismissed([dismissRow, watchRow], dismissedList).map(function(r){return r.id}).join(',');
+  // Dismissal wins even over a row kept only because it's watchlisted:
+  // watchRow is Low severity but survives a Critical threshold via the
+  // watchlist override, then gets removed by dismissal on top of that.
+  const dismissAfterWatchOverride = mod.filterOutDismissed(
+    mod.filterByThresholdOrWatched([watchRow], 'Critical', watchlist),
+    watchlist
+  ).length === 0;
+
   // --- trend history ---
   var hist = [];
   hist = mod.appendHistoryPoint(hist, {t:'2026-01-01T00:00:00Z', badgeCount:1, kevCount:2}, 3);
@@ -311,6 +325,8 @@ model_test=$(node -e "
     pkgCount: pkgCount,
     sortedNames: sortedNames,
     isWatchedTrue: isWatchedTrue, isWatchedFalse: isWatchedFalse,
+    isDismissedTrue: isDismissedTrue, isDismissedFalse: isDismissedFalse,
+    dismissKeptIds: dismissKeptIds, dismissAfterWatchOverride: dismissAfterWatchOverride,
     filteredKeptIds: filteredKeptIds,
     histLen: histLen, histFirstBadge: histFirstBadge,
     sparkFlatYsMatch: sparkFlatYsMatch, sparkRangeMonotonic: sparkRangeMonotonic, sparkEmptyLen: sparkEmptyLen,
@@ -398,6 +414,14 @@ if [[ -n $model_test ]]; then
     jq -e '.isWatchedTrue == true' <<<"$model_test"
   t "SentryModel.isWatched: false for an empty watchlist" \
     jq -e '.isWatchedFalse == false' <<<"$model_test"
+  t "SentryModel.isDismissed: true when CVE is in the dismissed list" \
+    jq -e '.isDismissedTrue == true' <<<"$model_test"
+  t "SentryModel.isDismissed: false for an empty dismissed list" \
+    jq -e '.isDismissedFalse == false' <<<"$model_test"
+  t "SentryModel.filterOutDismissed: drops the dismissed row, keeps the other" \
+    jq -e '.dismissKeptIds == "AVG-99"' <<<"$model_test"
+  t "SentryModel.filterOutDismissed: dismissal overrides a watchlist-kept row" \
+    jq -e '.dismissAfterWatchOverride == true' <<<"$model_test"
   t "SentryModel.filterByThresholdOrWatched: keeps a watched row below threshold" \
     jq -e '.filteredKeptIds == "AVG-99"' <<<"$model_test"
   t "SentryModel.appendHistoryPoint: caps length at maxPoints" \

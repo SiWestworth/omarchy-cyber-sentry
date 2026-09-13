@@ -70,6 +70,24 @@ function filterByThresholdOrWatched(rows, threshold, watchlist) {
   })
 }
 
+// True if this row's primary CVE has been dismissed ("I've assessed this
+// and don't need to see it again"). Unlike the watchlist, dismissal isn't
+// threshold-scoped — a dismissed row is hidden from every tab it could
+// appear in, not just System/Recent/Dev.
+function isDismissed(row, dismissedList) {
+  if (!dismissedList || dismissedList.length === 0) return false
+  var cve = firstCve(row)
+  return !!cve && dismissedList.indexOf(cve) >= 0
+}
+
+// Drops dismissed rows entirely, independent of severity threshold or
+// watchlist status — dismissing is a stronger, more specific signal than
+// "always show me this," so it takes precedence if a CVE is somehow both.
+function filterOutDismissed(rows, dismissedList) {
+  if (!dismissedList || dismissedList.length === 0) return rows
+  return rows.filter(function(r) { return !isDismissed(r, dismissedList) })
+}
+
 // --- Row builders ----------------------------------------------------------
 
 function archRow(a) {

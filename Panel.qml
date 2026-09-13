@@ -190,23 +190,49 @@ Panel {
     saveConfig({ watchlist: next })
   }
 
+  readonly property var dismissed: {
+    var d = conf("dismissed", [])
+    return Array.isArray(d) ? d : []
+  }
+
+  function toggleDismiss(cveId) {
+    if (!cveId) return
+    var next = dismissed.slice()
+    var idx = next.indexOf(cveId)
+    if (idx >= 0) next.splice(idx, 1)
+    else next.push(cveId)
+    saveConfig({ dismissed: next })
+  }
+
+  function clearDismissed() {
+    saveConfig({ dismissed: [] })
+  }
+
   readonly property var systemRows: SentryModel.sortBySeverity(
-    SentryModel.filterByThresholdOrWatched(SentryModel.archRows(enrichedRows), severityThreshold, watchlist)
+    SentryModel.filterOutDismissed(
+      SentryModel.filterByThresholdOrWatched(SentryModel.archRows(enrichedRows), severityThreshold, watchlist),
+      dismissed)
   ).slice(0, maxItems)
   readonly property var fixSummary: SentryModel.fixableSummary(systemRows)
   readonly property var kevFiltered: {
     var kRows = SentryModel.kevRows(enrichedRows)
     if (kevRecentDays > 0) kRows = SentryModel.kevRecentFilter(kRows, kevRecentDays)
     if (kevAffectsMeOnly) kRows = kRows.filter(function(r) { return r.installed })
+    kRows = SentryModel.filterOutDismissed(kRows, dismissed)
     return SentryModel.sortByDateDesc(kRows).slice(0, maxItems)
   }
   readonly property var nvdRows: SentryModel.sortBySeverity(
-    SentryModel.filterByThresholdOrWatched(SentryModel.nvdRows(enrichedRows), severityThreshold, watchlist)
+    SentryModel.filterOutDismissed(
+      SentryModel.filterByThresholdOrWatched(SentryModel.nvdRows(enrichedRows), severityThreshold, watchlist),
+      dismissed)
   ).slice(0, maxItems)
   readonly property var alertRows: SentryModel.sortByDateDesc(SentryModel.alertRows(enrichedRows)).slice(0, maxItems)
   readonly property var osvRows: SentryModel.sortBySeverity(
-    SentryModel.filterByThresholdOrWatched(SentryModel.osvRows(enrichedRows), severityThreshold, watchlist)
+    SentryModel.filterOutDismissed(
+      SentryModel.filterByThresholdOrWatched(SentryModel.osvRows(enrichedRows), severityThreshold, watchlist),
+      dismissed)
   ).slice(0, maxItems)
+  readonly property int dismissedCount: dismissed.length
 
   readonly property int badgeCount: SentryModel.affectedCount(archParsed, severityThreshold)
   readonly property int kevCount: kevFiltered.length
@@ -1461,6 +1487,30 @@ Panel {
               font.pixelSize: Style.font.caption
             }
           }
+
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+            visible: root.dismissedCount > 0
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.dismissedCount + " dismissed"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Button {
+              text: "Clear"
+              tooltipText: "Un-dismiss everything"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              onClicked: root.clearDismissed()
+            }
+          }
         }
       }
 
@@ -1695,6 +1745,34 @@ Panel {
     }
   }
 
+  // A small "dismiss" (snooze) control: mutes a CVE the user has assessed
+  // as a non-issue for their setup, without touching the global severity
+  // threshold. Distinct from WatchStar, which pins a row to always show.
+  component DismissButton: Text {
+    id: dismissButton
+    signal toggled()
+
+    text: "✕"
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+
+    PanelToolTip {
+      visible: dismissArea.containsMouse
+      text: "Dismiss (hide this CVE everywhere)"
+      fontFamily: root.fontFamily
+    }
+
+    MouseArea {
+      id: dismissArea
+      anchors.fill: parent
+      anchors.margins: -Style.space(3)
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: dismissButton.toggled()
+    }
+  }
+
   component EpssBadge: Rectangle {
     property string epssValue: ""
     visible: root.epssEnabled && epssValue !== ""
@@ -1793,7 +1871,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
-          width: parent.width - archSevLabel.implicitWidth - archEdbTag.implicitWidth - archEpssBadge.implicitWidth - archWatchStar.implicitWidth - Style.space(20)
+          width: parent.width - archSevLabel.implicitWidth - archEdbTag.implicitWidth - archEpssBadge.implicitWidth - archWatchStar.implicitWidth - archDismissButton.implicitWidth - Style.space(24)
           elide: Text.ElideRight
           text: modelData.id
           color: root.foreground
@@ -1829,6 +1907,12 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
           watched: SentryModel.isWatched(modelData, root.watchlist)
           onToggled: root.toggleWatch(SentryModel.firstCve(modelData))
+        }
+
+        DismissButton {
+          id: archDismissButton
+          anchors.verticalCenter: parent.verticalCenter
+          onToggled: root.toggleDismiss(SentryModel.firstCve(modelData))
         }
       }
 
@@ -1899,7 +1983,7 @@ Panel {
         spacing: Style.space(6)
 
         Text {
-          width: parent.width - kevRansomLabel.implicitWidth - kevInstalledTag.implicitWidth - kevEpssBadge.implicitWidth - kevEdbTag.implicitWidth - kevWatchStar.implicitWidth - Style.space(16)
+          width: parent.width - kevRansomLabel.implicitWidth - kevInstalledTag.implicitWidth - kevEpssBadge.implicitWidth - kevEdbTag.implicitWidth - kevWatchStar.implicitWidth - kevDismissButton.implicitWidth - Style.space(20)
           elide: Text.ElideRight
           text: modelData.id
           color: root.foreground
@@ -1942,6 +2026,12 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
           watched: SentryModel.isWatched(modelData, root.watchlist)
           onToggled: root.toggleWatch(SentryModel.firstCve(modelData))
+        }
+
+        DismissButton {
+          id: kevDismissButton
+          anchors.verticalCenter: parent.verticalCenter
+          onToggled: root.toggleDismiss(SentryModel.firstCve(modelData))
         }
       }
 
@@ -2015,7 +2105,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
-          width: parent.width - nvdSevLabel.implicitWidth - nvdScoreLabel.implicitWidth - nvdEpssBadge.implicitWidth - nvdEdbTag.implicitWidth - nvdWatchStar.implicitWidth - Style.space(20)
+          width: parent.width - nvdSevLabel.implicitWidth - nvdScoreLabel.implicitWidth - nvdEpssBadge.implicitWidth - nvdEdbTag.implicitWidth - nvdWatchStar.implicitWidth - nvdDismissButton.implicitWidth - Style.space(24)
           elide: Text.ElideRight
           text: modelData.id
           color: root.foreground
@@ -2061,6 +2151,12 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
           watched: SentryModel.isWatched(modelData, root.watchlist)
           onToggled: root.toggleWatch(SentryModel.firstCve(modelData))
+        }
+
+        DismissButton {
+          id: nvdDismissButton
+          anchors.verticalCenter: parent.verticalCenter
+          onToggled: root.toggleDismiss(SentryModel.firstCve(modelData))
         }
       }
 
@@ -2124,7 +2220,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
-          width: parent.width - osvSevLabel.implicitWidth - osvEpssBadge.implicitWidth - osvEdbTag.implicitWidth - osvWatchStar.implicitWidth - Style.space(16)
+          width: parent.width - osvSevLabel.implicitWidth - osvEpssBadge.implicitWidth - osvEdbTag.implicitWidth - osvWatchStar.implicitWidth - osvDismissButton.implicitWidth - Style.space(20)
           elide: Text.ElideRight
           text: modelData.ecosystem + " · " + modelData.packages + " " + modelData.version
           color: root.foreground
@@ -2160,6 +2256,12 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
           watched: SentryModel.isWatched(modelData, root.watchlist)
           onToggled: root.toggleWatch(SentryModel.firstCve(modelData))
+        }
+
+        DismissButton {
+          id: osvDismissButton
+          anchors.verticalCenter: parent.verticalCenter
+          onToggled: root.toggleDismiss(SentryModel.firstCve(modelData))
         }
       }
 
