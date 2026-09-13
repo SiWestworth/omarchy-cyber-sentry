@@ -40,6 +40,7 @@ Panel {
   readonly property string exploitdbPath: Qt.resolvedUrl("exploitdb-fetch").toString().replace(/^file:\/\//, "")
   readonly property string nvdPath: Qt.resolvedUrl("nvd-fetch").toString().replace(/^file:\/\//, "")
   readonly property string alertsPath: Qt.resolvedUrl("alerts-fetch").toString().replace(/^file:\/\//, "")
+  readonly property string osvPath: Qt.resolvedUrl("osv-fetch").toString().replace(/^file:\/\//, "")
 
   readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy/settings"
   readonly property string configPath: stateDir + "/cyber-sentry.json"
@@ -64,6 +65,7 @@ Panel {
   readonly property bool alertsEnabled: setting("alertsEnabled", true)
   readonly property bool epssEnabled: setting("epssEnabled", true)
   readonly property bool exploitdbEnabled: setting("exploitdbEnabled", true)
+  readonly property bool osvEnabled: setting("osvEnabled", true)
   readonly property bool notifyOnAffected: setting("notifyOnAffected", true)
   readonly property bool notifyOnKev: setting("notifyOnKev", true)
   readonly property bool notifyOnNvd: setting("notifyOnNvd", false)
@@ -88,6 +90,7 @@ Panel {
   property var alertsParsed: null
   property var epssParsed: null
   property var exploitdbParsed: null
+  property var osvParsed: null
   property var installedMap: ({})
   property var aurPackages: []
   // Never fold into totalBadge/urgent color below: these are real installed
@@ -100,13 +103,14 @@ Panel {
   property bool alertsFetching: false
   property bool epssFetching: false
   property bool exploitdbFetching: false
+  property bool osvFetching: false
   property var notified: ({})
   property real lastDigestAt: 0
   property bool stateLoaded: false
   property var history: []
   property bool historyLoaded: false
   property bool bootstrapDone: false
-  property int activeTab: 0  // 0=System, 1=Exploited, 2=Recent, 3=Alerts
+  property int activeTab: 0  // 0=System, 1=Exploited, 2=Recent, 3=Alerts, 4=AUR, 5=Dev
   property string cveDetailTitle: ""
   property string cveDetailText: ""
   property bool cveDetailOpen: false
@@ -116,7 +120,7 @@ Panel {
   property var userConfig: ({})
   property bool configLoaded: false
 
-  readonly property bool refreshing: archFetching || kevFetching || nvdFetching || alertsFetching || epssFetching || exploitdbFetching
+  readonly property bool refreshing: archFetching || kevFetching || nvdFetching || alertsFetching || epssFetching || exploitdbFetching || osvFetching
   readonly property bool paused: conf("paused", false)
 
   // --- config / settings lookups -------------------------------------------
@@ -165,7 +169,7 @@ Panel {
 
   // --- derived data ----------------------------------------------------------
   property var enrichedRows: {
-    var r = SentryModel.buildRows(archParsed, kevParsed, nvdParsed, alertsParsed)
+    var r = SentryModel.buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed)
     if (epssParsed) r = SentryModel.epssMerge(r, epssParsed)
     if (exploitdbParsed) r = SentryModel.exploitMerge(r, exploitdbParsed)
     if (Object.keys(installedMap).length > 0) r = SentryModel.installMerge(r, installedMap)
@@ -199,6 +203,9 @@ Panel {
     SentryModel.filterByThresholdOrWatched(SentryModel.nvdRows(enrichedRows), severityThreshold, watchlist)
   ).slice(0, maxItems)
   readonly property var alertRows: SentryModel.sortByDateDesc(SentryModel.alertRows(enrichedRows)).slice(0, maxItems)
+  readonly property var osvRows: SentryModel.sortBySeverity(
+    SentryModel.filterByThresholdOrWatched(SentryModel.osvRows(enrichedRows), severityThreshold, watchlist)
+  ).slice(0, maxItems)
 
   readonly property int badgeCount: SentryModel.affectedCount(archParsed, severityThreshold)
   readonly property int kevCount: kevFiltered.length
@@ -265,8 +272,15 @@ Panel {
     return SentryModel.sourceOk(exploitdbParsed) ? "ok" : "error"
   }
 
+  readonly property string osvStatusLabel: {
+    if (!osvEnabled) return "off"
+    if (osvFetching) return "syncing"
+    if (osvParsed === null) return "idle"
+    return SentryModel.sourceOk(osvParsed) ? "ok" : "error"
+  }
+
   readonly property string lastUpdatedText: {
-    var sources = [archParsed, kevParsed, nvdParsed, alertsParsed, epssParsed, exploitdbParsed]
+    var sources = [archParsed, kevParsed, nvdParsed, alertsParsed, epssParsed, exploitdbParsed, osvParsed]
     var newest = ""
     for (var i = 0; i < sources.length; i++) {
       var t = SentryModel.checkedAt(sources[i])
@@ -285,6 +299,7 @@ Panel {
     if (kevCount > 0) parts.push(kevCount + " exploited")
     if (nvdRows.length > 0) parts.push(nvdRows.length + " recent CVE")
     if (alertRows.length > 0) parts.push(alertRows.length + " alert")
+    if (osvRows.length > 0) parts.push(osvRows.length + " dev package")
     if (parts.length > 0) return parts.join(" · ")
     return "No threats matching the threshold — you are up to date"
   }
@@ -316,6 +331,11 @@ Panel {
       exploitdbFetching = true
       exploitdbProcess.command = [exploitdbPath]
       exploitdbProcess.running = true
+    }
+    if (osvEnabled && !osvFetching) {
+      osvFetching = true
+      osvProcess.command = [osvPath]
+      osvProcess.running = true
     }
     // EPSS runs after other sources (needs CVE list from their caches)
     if (epssEnabled && !epssFetching) {
@@ -441,6 +461,20 @@ Panel {
     initialized = true
   }
 
+  function applyOsv(exitCode, out, err) {
+    osvFetching = false
+    var parsed = null
+    if (exitCode === 0) {
+      try { parsed = JSON.parse(String(out || "")) } catch (e) { parsed = null }
+    }
+    if (!parsed || parsed.ok !== true) {
+      var detail = String(err || "").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "")
+      parsed = { ok: false, source: "osv", error: detail !== "" ? detail : "osv-fetch exited " + exitCode }
+    }
+    osvParsed = parsed
+    initialized = true
+  }
+
   // --- notifications --------------------------------------------------------
   function evaluateNotifications(type) {
     // Bootstrap suppression: on the very first successful fetch, mark all items
@@ -448,7 +482,7 @@ Panel {
     if (!bootstrapDone) {
       if (SentryModel.sourceOk(archParsed) && SentryModel.sourceOk(kevParsed)) {
         bootstrapDone = true
-        var allRows = SentryModel.buildRows(archParsed, kevParsed, null, null)
+        var allRows = SentryModel.buildRows(archParsed, kevParsed, null, null, null)
         SentryModel.markAllSeen(allRows, notified, Date.now())
         saveNotifyState()
         return
@@ -536,8 +570,25 @@ Panel {
 
   // --- cve.org detail on demand ---------------------------------------------
   function openCveDetail(row) {
-    var cve = SentryModel.firstCve(row)
     cveDetailFix = SentryModel.archFixState(row)
+
+    // OSV findings already carry their full description/severity/references
+    // straight from osv-fetch's one-shot /v1/query call — no on-demand
+    // cve.org lookup needed (and OSV ids like GHSA-/PYSEC-/RUSTSEC- aren't
+    // CVE ids cve-fetch could look up anyway).
+    if (row && row.type === "osv") {
+      cveDetailTitle = row.ecosystem + " · " + row.packages + " " + row.version + " · " + row.id
+      var refText = (row.references && row.references.length > 0)
+        ? "\n\nReferences:\n" + row.references.join("\n") : ""
+      cveDetailText = (row.description || "No description available.")
+        + "\n\nSeverity: " + (row.severity || "UNKNOWN") + refText
+      cveDetailError = false
+      cveDetailOpen = true
+      cveProcess.running = false
+      return
+    }
+
+    var cve = SentryModel.firstCve(row)
 
     if (!cve) {
       cveDetailTitle = (row && row.id) ? row.id : "No CVE"
@@ -702,6 +753,15 @@ Panel {
   }
 
   Process {
+    id: osvProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: osvStdout; waitForEnd: true }
+    stderr: StdioCollector { id: osvStderr; waitForEnd: true }
+    onExited: function(exitCode) { root.applyOsv(exitCode, osvStdout.text, osvStderr.text) }
+  }
+
+  Process {
     id: cveProcess
     running: false
     command: []
@@ -815,7 +875,7 @@ Panel {
       anchors.fill: parent
       onCloseRequested: root.close()
       onTabRequested: function(direction) {
-        if (direction > 0) root.activeTab = Math.min(4, root.activeTab + 1)
+        if (direction > 0) root.activeTab = Math.min(5, root.activeTab + 1)
         else root.activeTab = Math.max(0, root.activeTab - 1)
       }
       onTextKey: function(text) {
@@ -827,6 +887,7 @@ Panel {
         else if (key === "3") root.activeTab = 2
         else if (key === "4") root.activeTab = 3
         else if (key === "5") root.activeTab = 4
+        else if (key === "6") root.activeTab = 5
         else if (key === "q" && root.cveDetailOpen) root.cveDetailOpen = false
       }
 
@@ -922,6 +983,7 @@ Panel {
 
             StatusPill { pillLabel: "EDB"; pillState: root.exploitdbStatusLabel }
             StatusPill { pillLabel: "ALERT"; pillState: root.alertsStatusLabel }
+            StatusPill { pillLabel: "OSV"; pillState: root.osvStatusLabel }
           }
 
           Text {
@@ -971,6 +1033,11 @@ Panel {
               tabLabel: "AUR (" + root.aurCount + ")"
               tabActive: root.activeTab === 4
               onClicked: root.activeTab = 4
+            }
+            TabButton {
+              tabLabel: "Dev (" + root.osvRows.length + ")"
+              tabActive: root.activeTab === 5
+              onClicked: root.activeTab = 5
             }
           }
 
@@ -1240,6 +1307,66 @@ Panel {
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
+            }
+          }
+
+          // --- Dev tab (OSV.dev: pip/npm/cargo/go global installs) -----------
+          Rectangle {
+            id: osvView
+            width: parent.width
+            visible: root.activeTab === 5
+            height: root.activeTab === 5 ? Style.space(340) : 0
+            radius: Style.space(6)
+            color: "transparent"
+
+            ListView {
+              id: osvList
+              anchors.fill: parent
+              clip: true
+              model: root.osvRows
+              spacing: Style.space(3)
+              cacheBuffer: Style.space(60)
+
+              delegate: OsvRowDelegate {
+                width: osvList.width
+                onSelected: root.openCveDetail(modelData)
+              }
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: !root.osvEnabled
+              text: "OSV feed is disabled in settings"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: root.osvEnabled && root.osvParsed !== null && !SentryModel.sourceOk(root.osvParsed)
+              width: parent.width - Style.space(24)
+              horizontalAlignment: Text.AlignHCenter
+              text: "OSV feed unavailable: " + SentryModel.sourceError(root.osvParsed)
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: root.osvEnabled && (root.osvParsed === null || SentryModel.sourceOk(root.osvParsed))
+                && osvList.count === 0 && root.initialized
+              width: parent.width - Style.space(24)
+              horizontalAlignment: Text.AlignHCenter
+              text: root.initialized
+                ? "No vulnerabilities found in your global pip/npm/cargo/go packages"
+                : "Loading…"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
             }
           }
 
@@ -1887,6 +2014,96 @@ Panel {
         width: parent.width
         elide: Text.ElideRight
         text: modelData.date ? SentryModel.shortDate(modelData.date) : ""
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+  }
+
+  component OsvRowDelegate: Rectangle {
+    required property var modelData
+    signal selected()
+
+    implicitHeight: Style.space(62)
+    radius: Style.space(5)
+    color: osvRowArea.containsMouse
+      ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
+      : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
+
+    Rectangle {
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      anchors.left: parent.left
+      anchors.margins: Style.space(4)
+      width: 4
+      radius: 2
+      color: root.severityColor(parent.modelData.severity)
+    }
+
+    MouseArea {
+      id: osvRowArea
+      anchors.fill: parent
+      hoverEnabled: true
+      onClicked: function() { parent.selected() }
+    }
+
+    Column {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(1)
+
+      Row {
+        width: parent.width
+        spacing: Style.space(8)
+
+        Text {
+          width: parent.width - osvSevLabel.implicitWidth - osvEpssBadge.implicitWidth - osvEdbTag.implicitWidth - osvWatchStar.implicitWidth - Style.space(16)
+          elide: Text.ElideRight
+          text: modelData.ecosystem + " · " + modelData.packages + " " + modelData.version
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+
+        Text {
+          id: osvSevLabel
+          anchors.verticalCenter: parent.verticalCenter
+          text: modelData.severity
+          color: root.severityColor(modelData.severity)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+
+        EpssBadge {
+          id: osvEpssBadge
+          anchors.verticalCenter: parent.verticalCenter
+          epssValue: modelData.epss || ""
+        }
+
+        ExploitTag {
+          id: osvEdbTag
+          anchors.verticalCenter: parent.verticalCenter
+          titles: modelData.exploitTitles || []
+        }
+
+        WatchStar {
+          id: osvWatchStar
+          anchors.verticalCenter: parent.verticalCenter
+          watched: SentryModel.isWatched(modelData, root.watchlist)
+          onToggled: root.toggleWatch(SentryModel.firstCve(modelData))
+        }
+      }
+
+      Text {
+        width: parent.width
+        elide: Text.ElideRight
+        text: modelData.id + (modelData.description ? " — " + modelData.description : "")
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

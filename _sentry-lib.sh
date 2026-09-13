@@ -57,6 +57,27 @@ readonly SENTRY_BIN_TPUT=/usr/bin/tput
 # and so a future new fetch script can't forget it.
 SENTRY_CURL_HTTPS_ONLY=(--proto '=https' --proto-redir '=https')
 
+# Finds the first usable path for an optional dev-ecosystem tool (pip, npm,
+# cargo, go). Unlike pacman/curl/jq — which always live at one trusted system
+# path — these commonly live under the user's own home directory (rustup's
+# ~/.cargo/bin, pip's ~/.local/bin), so there's no single correct absolute
+# path to hardcode. Still never resolves via ambient $PATH: $1 is a test-only
+# override (empty in production), and every other arg is a fixed, literal
+# candidate path. Prints the first one that exists and is executable: return
+# 1 with no output if none match, so the caller can skip that ecosystem.
+sentry_find_optional_bin() {
+  local test_path=$1; shift
+  if [[ -n $test_path ]]; then
+    [[ -x $test_path ]] && { printf '%s' "$test_path"; return 0; }
+    return 1
+  fi
+  local candidate
+  for candidate in "$@"; do
+    [[ -x $candidate ]] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
 # True if $1 is owned by the current effective user.
 sentry_owned_by_us() {
   [[ $("$SENTRY_BIN_STAT" -c %u "$1" 2>/dev/null) == "$("$SENTRY_BIN_ID" -u)" ]]

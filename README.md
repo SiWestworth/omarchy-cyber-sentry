@@ -22,6 +22,7 @@ It correlates live security data against the packages actually installed on this
 | **ExploitDB** | Flags rows that have a known public exploit on file. |
 | **NCSC-NL Alerts** | Vendor security advisories from the Dutch National Cyber Security Centre. |
 | **cve.org** | On-demand detail lookup: click any row to pull the full CVE description, severity score, and references. |
+| **OSV.dev** | Scans your globally-installed pip/npm/cargo/go packages against OSV.dev's vulnerability database — coverage Arch Security Tracker can't provide, since it only tracks official Arch packages. |
 
 ## AUR / foreign-package coverage
 
@@ -33,6 +34,20 @@ you know exactly which packages fall outside the Arch tracker's precise
 coverage rather than assuming they're silently "clean." These packages are
 never counted toward the affected-package badge — they're not detected
 threats, just uncovered ones.
+
+## Dev-package coverage (pip/npm/cargo/go)
+
+The **Dev** tab scans whichever of pip, npm, cargo, and Go are actually
+present on this machine — each is independently optional, nothing errors if
+you don't have all four — and queries [OSV.dev](https://osv.dev) for each
+globally-installed package (`pip list`, `npm ls -g`, `cargo install --list`,
+and the module info embedded in binaries under `~/go/bin`). This is
+deliberately scoped to *global* installs only, not arbitrary project
+directories, so it needs zero configuration and stays fast. Note this is a
+genuinely separate coverage area from the rest of the panel: OSV.dev has no
+"Arch Linux" ecosystem, so it complements Arch Security Tracker rather than
+overlapping it — official Arch packages are still Arch Security Tracker's
+job.
 
 ## One-click remediation
 
@@ -113,7 +128,7 @@ completely clean uninstall.
 - **Every 30 minutes** (configurable) the fetch scripts run. They are plain Bash — no Python, no Node, no network dependencies beyond `curl` and `jq`.
 - The correlation logic runs in the bash script itself, not in QML or JavaScript. This keeps the panel lightweight and the logic auditable.
 - `vercmp` (from `pacman`) handles Arch's epoch and pkgrel conventions correctly.
-- The panel renders rows sorted by severity (highest first) in the System tab, by date added (newest first) in the Exploited/Recent/Alerts tabs, and alphabetically in the AUR tab.
+- The panel renders rows sorted by severity (highest first) in the System and Dev tabs, by date added (newest first) in the Exploited/Recent/Alerts tabs, and alphabetically in the AUR tab.
 
 ## Settings
 
@@ -129,6 +144,7 @@ Open the Omarchy settings UI and configure these under the **Cyber Sentry** sect
 | Watch NCSC-NL alerts | on | Toggle the vendor-advisory feed |
 | Show EPSS scores | on | Toggle exploit-probability scores on CVE-bearing rows |
 | Check ExploitDB | on | Toggle the public-exploit lookup |
+| Scan dev packages (OSV.dev) | on | Toggle the pip/npm/cargo/go global-package scan |
 | Notify on affected | on | Desktop notification when a new advisory affects an installed package |
 | Notify on KEV | on | Desktop notification when a new KEV entry is added |
 | Notify on NVD | off | Desktop notification on new High/Critical NVD CVEs |
@@ -157,6 +173,7 @@ Open the Omarchy settings UI and configure these under the **Cyber Sentry** sect
 | `3` | Switch to Recent (NVD) tab |
 | `4` | Switch to Alerts tab |
 | `5` | Switch to AUR tab |
+| `6` | Switch to Dev tab |
 | `q` | Close CVE detail overlay (if open) |
 | `Esc` | Close the panel |
 
@@ -170,6 +187,8 @@ Notification history is persisted at `~/.local/state/omarchy/settings/cyber-sent
 - `jq` (JSON processing)
 - `curl` (feed fetching)
 - A Nerd Font (for the shield and status glyphs on the bar)
+- Optional, for the Dev tab: `pip`, `npm`, `cargo`, and/or `go` — each is
+  independently optional; the Dev tab just scans whichever are present
 
 ## Testing
 

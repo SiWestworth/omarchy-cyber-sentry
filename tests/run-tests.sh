@@ -257,12 +257,30 @@ model_test=$(node -e "
   const dndOvernightOut = mod.isWithinDnd('22:00', '07:00', new Date(2026,0,1,12,0));
   const dndBadInput = mod.isWithinDnd('bad', '07:00', new Date(2026,0,1,23,0));
 
-  // --- buildRows with 4 sources ---
+  // --- osvRow ---
+  const osv = mod.osvRow({id:'GHSA-xxxx',ecosystem:'npm',package:'lodash',version:'4.17.15',summary:'ReDoS',severity:'MEDIUM',references:['https://x'],aliases:['CVE-2020-28500']});
+  const osvType = osv.type;
+  const osvCve = mod.firstCve(osv);
+  const osvNoAliasRow = mod.osvRow({id:'GHSA-yyyy',ecosystem:'PyPI',package:'foo',version:'1.0',summary:'S',severity:'HIGH',references:[],aliases:[]});
+  const osvNoAliasCve = mod.firstCve(osvNoAliasRow);
+
+  // --- Array.isArray regression: rows read back through a QML ListView's
+  // modelData marshal nested arrays into an array-like (has .length, is
+  // indexable) that is NOT a real JS Array — Array.isArray() on it is
+  // false. firstCve()/hasExploit() must still work via duck-typing.
+  // `arguments` is a real-world example of exactly this kind of object.
+  const arrayLike = (function() { return arguments; })('CVE-2026-4242');
+  const isArrayLikeRealArray = Array.isArray(arrayLike);
+  const duckTypedCve = mod.firstCve({cves: arrayLike});
+  const duckTypedExploit = mod.hasExploit({exploitTitles: (function() { return arguments; })('t1')});
+
+  // --- buildRows with 5 sources ---
   const allRows = mod.buildRows(
     {advisories:[{name:'A1',severity:'High',packages:'p',fixed:'1.0',issues:['CVE-1'],date:'2026-01-01'}]},
     {vulnerabilities:[{cveID:'CVE-2',vendorProject:'X',product:'Y',vulnerabilityName:'Z',dateAdded:'2026-08-01'}]},
     {cves:[{id:'CVE-3',severity:'High',score:7.5,description:'D',published:'2026-08-10'}]},
-    {advisories:[{title:'Alert 1',link:'https://l',date:'2026-08-12'}]}
+    {advisories:[{title:'Alert 1',link:'https://l',date:'2026-08-12'}]},
+    {findings:[{id:'GHSA-zzzz',ecosystem:'npm',package:'p',version:'1.0',summary:'s',severity:'HIGH',references:[],aliases:[]}]}
   );
   const rowTypes = allRows.map(function(r){return r.type}).sort().join(',');
 
@@ -293,7 +311,9 @@ model_test=$(node -e "
     sparkFlatYsMatch: sparkFlatYsMatch, sparkRangeMonotonic: sparkRangeMonotonic, sparkEmptyLen: sparkEmptyLen,
     dndSameDayIn: dndSameDayIn, dndSameDayOut: dndSameDayOut,
     dndOvernightLateIn: dndOvernightLateIn, dndOvernightEarlyIn: dndOvernightEarlyIn, dndOvernightOut: dndOvernightOut,
-    dndBadInput: dndBadInput
+    dndBadInput: dndBadInput,
+    osvType: osvType, osvCve: osvCve, osvNoAliasCve: osvNoAliasCve,
+    isArrayLikeRealArray: isArrayLikeRealArray, duckTypedCve: duckTypedCve, duckTypedExploit: duckTypedExploit
   }));
 " "$(dirname "$0")/../SentryModel.js" 2>/dev/null)
 
@@ -332,8 +352,20 @@ if [[ -n $model_test ]]; then
     jq -e '.nvdScore == 9.8' <<<"$model_test"
   t "SentryModel.alertRow: type is alert" \
     jq -e '.alertType == "alert"' <<<"$model_test"
-  t "SentryModel.buildRows: 4 source types" \
-    jq -e '.rowTypes == "alert,arch,kev,nvd"' <<<"$model_test"
+  t "SentryModel.buildRows: 5 source types" \
+    jq -e '.rowTypes == "alert,arch,kev,nvd,osv"' <<<"$model_test"
+  t "SentryModel.osvRow: type is osv" \
+    jq -e '.osvType == "osv"' <<<"$model_test"
+  t "SentryModel.osvRow: firstCve picks up a CVE alias when present" \
+    jq -e '.osvCve == "CVE-2020-28500"' <<<"$model_test"
+  t "SentryModel.osvRow: firstCve is empty when there is no CVE alias" \
+    jq -e '.osvNoAliasCve == ""' <<<"$model_test"
+  t "regression: 'arguments' is array-like but not Array.isArray" \
+    jq -e '.isArrayLikeRealArray == false' <<<"$model_test"
+  t "regression: firstCve works on a non-Array.isArray array-like (ListView modelData shape)" \
+    jq -e '.duckTypedCve == "CVE-2026-4242"' <<<"$model_test"
+  t "regression: hasExploit works on a non-Array.isArray array-like" \
+    jq -e '.duckTypedExploit == true' <<<"$model_test"
   t "SentryModel.archFixState: command is always full-system update" \
     jq -e '.fixCommand == "sudo pacman -Syu"' <<<"$model_test"
   t "SentryModel.archFixState: packages passed through unmodified" \
@@ -436,6 +468,55 @@ else
 fi
 
 echo
+echo "== osv-fetch =="
+
+env4=$(new_env)
+mkdir -p "$env4/bin" "$env4/cache/omarchy-cyber-sentry"
+
+cat >"$env4/bin/fake-npm" <<'EOF'
+#!/bin/bash
+echo '{"dependencies":{"lodash":{"version":"4.17.15"}}}'
+EOF
+chmod +x "$env4/bin/fake-npm"
+
+export XDG_RUNTIME_DIR="$env4/cache"
+export SENTRY_TEST_NPM="$env4/bin/fake-npm"
+export SENTRY_TEST_PIP=/nonexistent
+export SENTRY_TEST_CARGO=/nonexistent
+export SENTRY_TEST_GO=/nonexistent
+
+osv_out=$(./osv-fetch --force 2>&1)
+osv_json=$(jq -c . <<<"$osv_out" 2>/dev/null || echo "{}")
+
+t "osv-fetch scans exactly the one fake-npm global package" \
+  jq -e '.scanned == 1' <<<"$osv_json"
+t "osv-fetch finds real OSV vulnerabilities for lodash 4.17.15" \
+  jq -e '.ok == true and (.count > 0)' <<<"$osv_json"
+t "osv-fetch finding carries ecosystem, package, version, severity" \
+  jq -e '.findings[0] | (.ecosystem == "npm") and (.package == "lodash") and (.version == "4.17.15") and (.severity | length > 0)' <<<"$osv_json"
+t "osv-fetch normalizes OSV's MODERATE severity to MEDIUM" \
+  jq -e '[.findings[] | select(.id == "GHSA-29mw-wpgm-hmr9")][0].severity == "MEDIUM"' <<<"$osv_json"
+t "osv-fetch surfaces the CVE alias for watchlist/EPSS enrichment" \
+  jq -e '[.findings[] | select(.id == "GHSA-29mw-wpgm-hmr9")][0].aliases | index("CVE-2020-28500") != null' <<<"$osv_json"
+
+# All four ecosystem tools absent: not an error, just nothing scanned.
+env5=$(new_env)
+mkdir -p "$env5/cache/omarchy-cyber-sentry"
+export XDG_RUNTIME_DIR="$env5/cache"
+export SENTRY_TEST_NPM=/nonexistent
+export SENTRY_TEST_PIP=/nonexistent
+export SENTRY_TEST_CARGO=/nonexistent
+export SENTRY_TEST_GO=/nonexistent
+
+osv_empty_out=$(./osv-fetch --force 2>&1)
+osv_empty_json=$(jq -c . <<<"$osv_empty_out" 2>/dev/null || echo "{}")
+t "osv-fetch with no ecosystem tools present is ok:true with 0 scanned, not an error" \
+  jq -e '.ok == true and .scanned == 0 and .count == 0' <<<"$osv_empty_json"
+
+unset SENTRY_TEST_NPM SENTRY_TEST_PIP SENTRY_TEST_CARGO SENTRY_TEST_GO
+export XDG_RUNTIME_DIR="$old_runtime"
+
+echo
 echo "== alerts-fetch fixture =="
 
 env3=$(new_env)
@@ -483,9 +564,9 @@ echo
 echo "== manifest.json =="
 
 t "manifest.json is valid JSON" \
-  jq -e '.schemaVersion == 1 and .version == "2.2.0"' "$(dirname "$0")/../manifest.json"
+  jq -e '.schemaVersion == 1 and .version == "2.3.0"' "$(dirname "$0")/../manifest.json"
 t "manifest.json has all new settings" \
-  jq -e '(.barWidget.defaults.nvdEnabled != null) and (.barWidget.defaults.alertsEnabled != null) and (.barWidget.defaults.epssEnabled != null) and (.barWidget.defaults.exploitdbEnabled != null) and (.barWidget.defaults.showKevBadge != null) and (.barWidget.defaults.kevRecentDays != null) and (.barWidget.defaults.kevAffectsMeOnly != null)' "$(dirname "$0")/../manifest.json"
+  jq -e '(.barWidget.defaults.nvdEnabled != null) and (.barWidget.defaults.alertsEnabled != null) and (.barWidget.defaults.epssEnabled != null) and (.barWidget.defaults.exploitdbEnabled != null) and (.barWidget.defaults.showKevBadge != null) and (.barWidget.defaults.kevRecentDays != null) and (.barWidget.defaults.kevAffectsMeOnly != null) and (.barWidget.defaults.osvEnabled != null)' "$(dirname "$0")/../manifest.json"
 t "manifest.json has the trend/watchlist/digest/dnd settings" \
   jq -e '(.barWidget.defaults.showTrend != null) and (.barWidget.defaults.digestEnabled != null) and (.barWidget.defaults.digestIntervalDays != null) and (.barWidget.defaults.dndEnabled != null) and (.barWidget.defaults.dndStart != null) and (.barWidget.defaults.dndEnd != null)' "$(dirname "$0")/../manifest.json"
 t "manifest.json schema keys match defaults keys exactly" \

@@ -5,7 +5,7 @@
 // needs. No QML or Quickshell imports: keep it testable.
 //
 // Sources: arch-fetch, kev-fetch, epss-fetch, exploitdb-fetch, nvd-fetch,
-//          alerts-fetch
+//          alerts-fetch, osv-fetch
 
 .pragma library
 
@@ -127,6 +127,28 @@ function nvdRow(a) {
   }
 }
 
+// OSV.dev finding for a globally-installed pip/npm/cargo/go package. Unlike
+// the KEV/NVD rows, the description/severity/references are already fully
+// populated by osv-fetch itself (no on-demand cve.org lookup needed) since
+// OSV's /v1/query returns full vulnerability details in one round trip.
+function osvRow(o) {
+  return {
+    type: "osv",
+    id: String(o.id || ""),
+    severity: String(o.severity || ""),
+    packages: String(o.package || ""),
+    fixed: "",
+    unfixed: false,
+    cves: (o.aliases && o.aliases.length > 0) ? o.aliases : [],
+    date: "",
+    reference: "",
+    ecosystem: String(o.ecosystem || ""),
+    version: String(o.version || ""),
+    description: String(o.summary || ""),
+    references: o.references || []
+  }
+}
+
 function alertRow(a) {
   return {
     type: "alert",
@@ -145,7 +167,7 @@ function alertRow(a) {
 
 // --- Build combined rows ---------------------------------------------------
 
-function buildRows(archParsed, kevParsed, nvdParsed, alertsParsed) {
+function buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed) {
   var rows = []
   var archList = archParsed && archParsed.advisories ? archParsed.advisories : []
   for (var i = 0; i < archList.length; i++) rows.push(archRow(archList[i]))
@@ -155,6 +177,8 @@ function buildRows(archParsed, kevParsed, nvdParsed, alertsParsed) {
   for (var k = 0; k < nvdList.length; k++) rows.push(nvdRow(nvdList[k]))
   var alertList = alertsParsed && alertsParsed.advisories ? alertsParsed.advisories : []
   for (var l = 0; l < alertList.length; l++) rows.push(alertRow(alertList[l]))
+  var osvList = osvParsed && osvParsed.findings ? osvParsed.findings : []
+  for (var m = 0; m < osvList.length; m++) rows.push(osvRow(osvList[m]))
   return rows
 }
 
@@ -244,6 +268,10 @@ function nvdRows(rows) {
 
 function alertRows(rows) {
   return rows.filter(function(r) { return r.type === "alert" })
+}
+
+function osvRows(rows) {
+  return rows.filter(function(r) { return r.type === "osv" })
 }
 
 // --- Sorting ---------------------------------------------------------------

@@ -1,0 +1,157 @@
+#!/bin/bash
+
+# OSV.dev language-ecosystem vulnerability scan.
+#
+# Usage: osv-fetch [--force]
+#
+# Enumerates globally-installed packages across pip, npm, cargo, and Go —
+# each ecosystem independently optional, since a personal dev box rarely has
+# all four — then queries OSV.dev's single-package endpoint once per package
+# and emits only the packages with at least one matching vulnerability.
+# No API key required.
+#
+# Deliberately scoped to global installs only (pip list / npm ls -g / cargo
+# install --list / binaries under ~/go/bin), not project directories: it
+# needs zero configuration this way, matching how the pacman/AUR scans
+# already work passively. Arch's own official packages are NOT covered here
+# — OSV.dev has no "Arch Linux" ecosystem; that's what arch-fetch is for.
+#
+# Prints {"ok":true,"source":"osv","count":N,"checkedAt":...,"scanned":N,"findings":[...]}
+# or {"ok":false,"error":"..."} — exiting 0 either way.
+
+set -uo pipefail
+
+readonly QUERY_URL="https://api.osv.dev/v1/query"
+readonly UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0"
+readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
+readonly CACHE_FILE="$CACHE_DIR/osv-findings.json"
+readonly TTL="${SENTRY_OSV_TTL:-3600}"
+readonly MAX_BYTES=1048576
+# Hard cap on how many packages get queried in one run — bounds worst-case
+# runtime (one HTTP round trip per package) even on a machine with an
+# unusually large number of global installs.
+readonly MAX_PACKAGES="${SENTRY_OSV_MAX_PACKAGES:-150}"
+
+source "${BASH_SOURCE[0]%/*}/_sentry-lib.sh"
+
+die() {
+  "$SENTRY_BIN_JQ" -cn --arg m "$1" '{ok:false, source:"osv", error:$m}'
+  exit 0
+}
+
+sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use"
+
+needs_refresh() {
+  [[ -s $CACHE_FILE ]] || return 0
+  local now age
+  now=$("$SENTRY_BIN_DATE" +%s)
+  age=$((now - $("$SENTRY_BIN_STAT" -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
+  (( age >= TTL ))
+}
+
+if [[ ${1:-} == --force ]] || needs_refresh; then
+  tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
+
+  # Each entry: "ecosystem\x1fname\x1fversion". Built up across whichever
+  # ecosystems are actually present on this machine.
+  packages=()
+
+  # --- pip (PyPI) ------------------------------------------------------------
+  if pip_bin=$(sentry_find_optional_bin "${SENTRY_TEST_PIP:-}" \
+      /usr/bin/pip /usr/bin/pip3 "$HOME/.local/bin/pip" "$HOME/.local/bin/pip3"); then
+    while IFS=$'\t' read -r name version; do
+      [[ -n $name && -n $version ]] && packages+=("PyPI"$'\x1f'"$name"$'\x1f'"$version")
+    done < <("$pip_bin" list --format=json 2>/dev/null |
+      "$SENTRY_BIN_JQ" -r '.[]? | [(.name // ""), (.version // "")] | @tsv' 2>/dev/null)
+  fi
+
+  # --- npm -------------------------------------------------------------------
+  if npm_bin=$(sentry_find_optional_bin "${SENTRY_TEST_NPM:-}" \
+      /usr/bin/npm /usr/local/bin/npm); then
+    while IFS=$'\t' read -r name version; do
+      [[ -n $name && -n $version ]] && packages+=("npm"$'\x1f'"$name"$'\x1f'"$version")
+    done < <("$npm_bin" ls -g --depth=0 --json 2>/dev/null |
+      "$SENTRY_BIN_JQ" -r '(.dependencies // {}) | to_entries[]? | [.key, (.value.version // "")] | @tsv' 2>/dev/null)
+  fi
+
+  # --- cargo (crates.io) -------------------------------------------------------
+  if cargo_bin=$(sentry_find_optional_bin "${SENTRY_TEST_CARGO:-}" \
+      "$HOME/.cargo/bin/cargo" /usr/bin/cargo); then
+    while IFS= read -r line; do
+      if [[ $line =~ ^([A-Za-z0-9_.-]+)\ v([0-9][^:]*): ]]; then
+        packages+=("crates.io"$'\x1f'"${BASH_REMATCH[1]}"$'\x1f'"${BASH_REMATCH[2]}")
+      fi
+    done < <("$cargo_bin" install --list 2>/dev/null)
+  fi
+
+  # --- go ----------------------------------------------------------------------
+  # `go version -m <binary>` prints embedded build info for any binary built
+  # with `go install`/`go build` — including its module path and version, no
+  # network access or project checkout needed. Only binaries actually under
+  # ~/go/bin (go install's default GOBIN) are considered.
+  if go_bin=$(sentry_find_optional_bin "${SENTRY_TEST_GO:-}" /usr/bin/go "$HOME/.local/bin/go"); then
+    go_bin_dir="${SENTRY_TEST_GOBIN_DIR:-$HOME/go/bin}"
+    if [[ -d $go_bin_dir ]]; then
+      for f in "$go_bin_dir"/*; do
+        [[ -f $f && -x $f ]] || continue
+        modline=$("$go_bin" version -m "$f" 2>/dev/null | "$SENTRY_BIN_GREP" -m1 $'^\tmod\t')
+        [[ -n $modline ]] || continue
+        mod=$(printf '%s' "$modline" | "$SENTRY_BIN_CUT" -f3)
+        ver=$(printf '%s' "$modline" | "$SENTRY_BIN_CUT" -f4)
+        [[ -n $mod && -n $ver ]] && packages+=("Go"$'\x1f'"$mod"$'\x1f'"$ver")
+      done
+    fi
+  fi
+
+  # Dedupe (ecosystem+name+version) and cap.
+  if [[ ${#packages[@]} -gt 0 ]]; then
+    mapfile -t packages < <(printf '%s\n' "${packages[@]}" | "$SENTRY_BIN_SORT" -u | "$SENTRY_BIN_HEAD" -n "$MAX_PACKAGES")
+  fi
+
+  scanned=${#packages[@]}
+  findings_ndjson=""
+
+  for entry in "${packages[@]:-}"; do
+    [[ -n $entry ]] || continue
+    IFS=$'\x1f' read -r eco name ver <<<"$entry"
+    [[ -n $eco && -n $name && -n $ver ]] || continue
+
+    req_body=$("$SENTRY_BIN_JQ" -cn --arg name "$name" --arg eco "$eco" --arg ver "$ver" \
+      '{package:{name:$name,ecosystem:$eco},version:$ver}')
+
+    resp=$("$SENTRY_BIN_CURL" -fsSL --max-time 10 --max-filesize "$MAX_BYTES" \
+      "${SENTRY_CURL_HTTPS_ONLY[@]}" \
+      -A "$UA" -H "Content-Type: application/json" -d "$req_body" "$QUERY_URL" 2>/dev/null)
+    [[ -n $resp ]] || continue
+
+    batch=$(printf '%s' "$resp" | "$SENTRY_BIN_JQ" -c --arg eco "$eco" --arg name "$name" --arg ver "$ver" '
+      [.vulns[]? | {
+        id: .id,
+        ecosystem: $eco,
+        package: $name,
+        version: $ver,
+        summary: ((.summary // .details // "") | .[0:400]),
+        severity: ((.database_specific.severity // "UNKNOWN") as $s | if $s == "MODERATE" then "MEDIUM" else $s end),
+        references: ([.references[]? | .url // ""] | map(select(length > 0)) | .[0:5]),
+        aliases: ([.aliases[]? | select(startswith("CVE-"))])
+      }]' 2>/dev/null)
+    [[ -n $batch ]] && findings_ndjson+="$batch"$'\n'
+  done
+
+  all=$(printf '%s' "$findings_ndjson" | "$SENTRY_BIN_JQ" -cs 'add // []' 2>/dev/null)
+  [[ -n $all ]] || all="[]"
+
+  printf '%s' "$all" | "$SENTRY_BIN_JQ" -c --arg checked "$("$SENTRY_BIN_DATE" -u +%FT%TZ)" \
+    --argjson scanned "$scanned" \
+    '{ok:true, source:"osv", count:length, checkedAt:$checked, scanned:$scanned, findings:.}' > "$tmp" 2>/dev/null
+
+  [[ -s $tmp ]] && "$SENTRY_BIN_MV" -f "$tmp" "$CACHE_FILE"
+fi
+
+[[ -s $CACHE_FILE ]] || die "OSV scan produced no cache"
+sentry_safe_regular_file "$CACHE_FILE" || die "cache file is not safe to read"
+
+"$SENTRY_BIN_JQ" -e 'type=="object" and (.findings | type=="array")' "$CACHE_FILE" >/dev/null 2>&1 ||
+  die "OSV cache contains unparseable data"
+
+"$SENTRY_BIN_CAT" "$CACHE_FILE"

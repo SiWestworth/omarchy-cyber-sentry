@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "cyber.sentry",
   "name": "Cyber Sentry",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "author": "futuresi",
   "license": "MIT",
-  "description": "Cybersecurity threat intelligence: which exploited-in-the-wild vulnerabilities affect the packages installed on this machine, with CISA KEV, CVE detail, EPSS exploit-probability scores, NVD recent CVEs, ExploitDB public exploits, and NCSC-NL vendor advisories.",
+  "description": "Cybersecurity threat intelligence: which exploited-in-the-wild vulnerabilities affect the packages installed on this machine, with CISA KEV, CVE detail, EPSS exploit-probability scores, NVD recent CVEs, ExploitDB public exploits, NCSC-NL vendor advisories, and OSV.dev coverage for global pip/npm/cargo/go packages.",
   "homepage": "https://github.com/SiWestworth/omarchy-cyber-sentry",
   "repository": "https://github.com/SiWestworth/omarchy-cyber-sentry",
   "keywords": [
@@ -20,7 +20,12 @@
     "nvd",
     "exploitdb",
     "ncsc",
-    "advisories"
+    "advisories",
+    "osv",
+    "pip",
+    "npm",
+    "cargo",
+    "go"
   ],
   "kinds": [
     "bar-widget"
@@ -30,7 +35,7 @@
   },
   "barWidget": {
     "displayName": "Cyber Sentry",
-    "description": "Threat intelligence that knows what you have installed — Arch Security Tracker advisories correlated against pacman -Q, CISA KEV, EPSS exploit-probability, NVD recent CVEs, ExploitDB public exploits, and NCSC-NL vendor advisories.",
+    "description": "Threat intelligence that knows what you have installed — Arch Security Tracker advisories correlated against pacman -Q, CISA KEV, EPSS exploit-probability, NVD recent CVEs, ExploitDB public exploits, NCSC-NL vendor advisories, and OSV.dev scanning of your global pip/npm/cargo/go packages.",
     "category": "Security",
     "allowMultiple": false,
     "defaultSection": "right",
@@ -43,6 +48,7 @@
       "alertsEnabled": true,
       "epssEnabled": true,
       "exploitdbEnabled": true,
+      "osvEnabled": true,
       "notifyOnAffected": true,
       "notifyOnKev": true,
       "notifyOnNvd": false,
@@ -110,6 +116,12 @@
         "key": "exploitdbEnabled",
         "type": "boolean",
         "label": "Check for public exploits on ExploitDB",
+        "defaultValue": true
+      },
+      {
+        "key": "osvEnabled",
+        "type": "boolean",
+        "label": "Scan global pip/npm/cargo/go packages against OSV.dev",
         "defaultValue": true
       },
       {
