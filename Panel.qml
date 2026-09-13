@@ -193,6 +193,7 @@ Panel {
   readonly property var systemRows: SentryModel.sortBySeverity(
     SentryModel.filterByThresholdOrWatched(SentryModel.archRows(enrichedRows), severityThreshold, watchlist)
   ).slice(0, maxItems)
+  readonly property var fixSummary: SentryModel.fixableSummary(systemRows)
   readonly property var kevFiltered: {
     var kRows = SentryModel.kevRows(enrichedRows)
     if (kevRecentDays > 0) kRows = SentryModel.kevRecentFilter(kRows, kevRecentDays)
@@ -1050,9 +1051,71 @@ Panel {
             radius: Style.space(6)
             color: "transparent"
 
+            Column {
+              id: fixBanner
+              visible: root.fixSummary.fixable > 0
+              width: parent.width
+              spacing: Style.space(2)
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.fixSummary.fixable + " of " + root.fixSummary.total
+                    + " affected packages are cleared by running:"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "sudo pacman -Syu"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+
+                Button {
+                  text: "Copy"
+                  tooltipText: "Copy command to clipboard"
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  onClicked: root.copyToClipboard("sudo pacman -Syu")
+                }
+
+                Button {
+                  visible: root.bar !== null
+                  text: "Run in terminal"
+                  tooltipText: "Open a floating terminal to run it"
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  onClicked: root.bar.run("omarchy-launch-floating-terminal-with-presentation "
+                    + Util.shellQuote("sudo pacman -Syu"))
+                }
+              }
+            }
+
             ListView {
               id: systemList
-              anchors.fill: parent
+              anchors.top: fixBanner.visible ? fixBanner.bottom : parent.top
+              anchors.topMargin: fixBanner.visible ? Style.space(6) : 0
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.bottom: parent.bottom
               clip: true
               model: root.systemRows
               spacing: Style.space(3)

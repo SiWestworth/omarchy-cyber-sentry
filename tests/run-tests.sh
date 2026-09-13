@@ -219,6 +219,11 @@ model_test=$(node -e "
   const kevForFix = mod.kevRow({cveID:'CVE-2026-0032',vendorProject:'X',product:'Y',dateAdded:'2026-08-01'});
   const nonArchFixState = mod.archFixState(kevForFix);
 
+  // --- fixableSummary ---
+  const fixSumRows = [fixedRow, unfixedRow, kevForFix,
+    mod.archRow({name:'AVG-4',severity:'Low',packages:'baz=1.0',fixed:'2.0-1',cves:['CVE-2026-0033'],date:'2026-01-01'})];
+  const fixSum = mod.fixableSummary(fixSumRows);
+
   // --- parsePackageList ---
   const pkgList = mod.parsePackageList('foo 1.0-1\nbar-bin 2.3.4-1\n\nbaz 5.6.7-2\n');
   const pkgNames = pkgList.map(function(p){return p.name}).join(',');
@@ -313,7 +318,8 @@ model_test=$(node -e "
     dndOvernightLateIn: dndOvernightLateIn, dndOvernightEarlyIn: dndOvernightEarlyIn, dndOvernightOut: dndOvernightOut,
     dndBadInput: dndBadInput,
     osvType: osvType, osvCve: osvCve, osvNoAliasCve: osvNoAliasCve,
-    isArrayLikeRealArray: isArrayLikeRealArray, duckTypedCve: duckTypedCve, duckTypedExploit: duckTypedExploit
+    isArrayLikeRealArray: isArrayLikeRealArray, duckTypedCve: duckTypedCve, duckTypedExploit: duckTypedExploit,
+    fixSumFixable: fixSum.fixable, fixSumTotal: fixSum.total
   }));
 " "$(dirname "$0")/../SentryModel.js" 2>/dev/null)
 
@@ -374,6 +380,10 @@ if [[ -n $model_test ]]; then
     jq -e '.fixVersion == "3.0-1"' <<<"$model_test"
   t "SentryModel.archFixState: null when advisory has no fix released" \
     jq -e '.noFixState == null' <<<"$model_test"
+  t "SentryModel.fixableSummary: counts only fixed, non-unfixed arch rows" \
+    jq -e '.fixSumFixable == 2' <<<"$model_test"
+  t "SentryModel.fixableSummary: total excludes non-arch rows" \
+    jq -e '.fixSumTotal == 3' <<<"$model_test"
   t "SentryModel.archFixState: null for non-arch row types" \
     jq -e '.nonArchFixState == null' <<<"$model_test"
   t "SentryModel.parsePackageList: parses multiple valid lines" \

@@ -60,6 +60,11 @@ sync state — and nothing ever runs without you explicitly clicking it; "Run in
 terminal" opens a floating terminal so you confirm and enter your own `sudo`
 password interactively.
 
+The System tab also shows a headline rollup above the list — "N of M
+affected packages are cleared by running: `sudo pacman -Syu`" — with the
+same Copy/Run in terminal buttons, so you don't have to open each advisory
+individually to find out that one command clears most (or all) of them.
+
 ## Exposure trend
 
 A small sparkline in the panel header tracks the affected-package badge count

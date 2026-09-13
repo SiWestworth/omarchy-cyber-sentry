@@ -348,6 +348,17 @@ function archFixState(row) {
   return { command: "sudo pacman -Syu", packages: row.packages || "", version: row.fixed }
 }
 
+// Headline for the System tab: of the currently-visible affected Arch
+// packages, how many are already cleared by one `sudo pacman -Syu` (a
+// released fix exists) versus still open (no fix yet, or unfixed/vulnerable
+// with no released version). Same "always a full-system update" rule as
+// archFixState — this only counts, it never composes a different command.
+function fixableSummary(rows) {
+  var archOnly = rows.filter(function(r) { return r && r.type === "arch" })
+  var fixable = archOnly.filter(function(r) { return !r.unfixed && r.fixed }).length
+  return { fixable: fixable, total: archOnly.length }
+}
+
 function epssColor(epss) {
   var v = parseFloat(epss || "0")
   if (v >= 0.9) return "#e5484d"  // critical red
