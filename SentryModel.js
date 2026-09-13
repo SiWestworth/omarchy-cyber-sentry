@@ -145,6 +145,51 @@ function nvdRow(a) {
   }
 }
 
+// GHSA advisory. Field-shape-compatible with nvdRow() on purpose so both
+// can share the same row delegate in the Recent tab. The ecosystem/package
+// (and a "+N more" suffix when an advisory affects several packages) is
+// folded into the description text rather than a new UI field, to avoid
+// touching the shared delegate for a merged-in source.
+function ghsaRow(g) {
+  var pkgTag = g.package
+    ? "[" + (g.ecosystem || "?") + " · " + g.package + (g.packageCount > 1 ? " +" + (g.packageCount - 1) + " more" : "") + "] "
+    : ""
+  return {
+    type: "ghsa",
+    id: String(g.id || g.cve_id || ""),
+    severity: String(g.severity || "").toUpperCase(),
+    packages: String(g.package || ""),
+    fixed: "",
+    unfixed: false,
+    cves: g.cve_id ? [String(g.cve_id)] : [],
+    date: String(g.published || ""),
+    reference: "",
+    description: pkgTag + String(g.summary || ""),
+    score: (g.score !== undefined && g.score !== null) ? g.score : null,
+    vector: "",
+    references: g.references || []
+  }
+}
+
+// Combine NVD and GHSA recent-advisory rows into one feed, dropping a GHSA
+// entry whose CVE already has an NVD row — NVD is the "official" record for
+// a CVE that both sources happen to cover, so it's kept and the GHSA
+// duplicate is dropped rather than showing the same CVE twice. GHSA entries
+// with no CVE (or a CVE NVD hasn't picked up) always pass through — that's
+// exactly the coverage GHSA adds that NVD alone doesn't have.
+function mergeNvdAndGhsa(nvdRowsList, ghsaRowsList) {
+  var nvdCves = {}
+  for (var i = 0; i < nvdRowsList.length; i++) {
+    var cve = firstCve(nvdRowsList[i])
+    if (cve) nvdCves[cve] = true
+  }
+  var extraGhsa = ghsaRowsList.filter(function(r) {
+    var cve = firstCve(r)
+    return !cve || !nvdCves[cve]
+  })
+  return nvdRowsList.concat(extraGhsa)
+}
+
 // OSV.dev finding for a globally-installed pip/npm/cargo/go package. Unlike
 // the KEV/NVD rows, the description/severity/references are already fully
 // populated by osv-fetch itself (no on-demand cve.org lookup needed) since
@@ -185,7 +230,7 @@ function alertRow(a) {
 
 // --- Build combined rows ---------------------------------------------------
 
-function buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed) {
+function buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed, ghsaParsed) {
   var rows = []
   var archList = archParsed && archParsed.advisories ? archParsed.advisories : []
   for (var i = 0; i < archList.length; i++) rows.push(archRow(archList[i]))
@@ -197,6 +242,8 @@ function buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed) {
   for (var l = 0; l < alertList.length; l++) rows.push(alertRow(alertList[l]))
   var osvList = osvParsed && osvParsed.findings ? osvParsed.findings : []
   for (var m = 0; m < osvList.length; m++) rows.push(osvRow(osvList[m]))
+  var ghsaList = ghsaParsed && ghsaParsed.advisories ? ghsaParsed.advisories : []
+  for (var n = 0; n < ghsaList.length; n++) rows.push(ghsaRow(ghsaList[n]))
   return rows
 }
 
@@ -286,6 +333,10 @@ function nvdRows(rows) {
 
 function alertRows(rows) {
   return rows.filter(function(r) { return r.type === "alert" })
+}
+
+function ghsaRows(rows) {
+  return rows.filter(function(r) { return r.type === "ghsa" })
 }
 
 function osvRows(rows) {

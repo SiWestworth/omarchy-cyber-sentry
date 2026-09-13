@@ -207,6 +207,24 @@ model_test=$(node -e "
   const nvdType = nvd.type;
   const nvdScore = nvd.score;
 
+  // --- ghsaRow ---
+  const ghsaWithCve = mod.ghsaRow({id:'GHSA-aaaa-bbbb-cccc',cve_id:'CVE-2026-7000',severity:'high',summary:'Bad thing',published:'2026-08-11',score:8.1,package:'lodash',ecosystem:'npm',packageCount:1,references:['https://x']});
+  const ghsaWithCveType = ghsaWithCve.type;
+  const ghsaWithCveSeverity = ghsaWithCve.severity;
+  const ghsaWithCveCve = mod.firstCve(ghsaWithCve);
+  const ghsaWithCveDesc = ghsaWithCve.description;
+
+  const ghsaNoCve = mod.ghsaRow({id:'GHSA-dddd-eeee-ffff',cve_id:'',severity:'critical',summary:'Other thing',published:'2026-08-12',package:'foo',ecosystem:'rust',packageCount:3,references:[]});
+  const ghsaNoCveCve = mod.firstCve(ghsaNoCve);
+  const ghsaNoCveDesc = ghsaNoCve.description;
+
+  // --- mergeNvdAndGhsa ---
+  const mergeNvd = [mod.nvdRow({id:'CVE-2026-8000',severity:'High',score:7.0,description:'D',published:'2026-08-01'})];
+  const mergeGhsaDup = mod.ghsaRow({id:'GHSA-dup',cve_id:'CVE-2026-8000',severity:'high',summary:'dup',published:'2026-08-01',package:'p',ecosystem:'npm',packageCount:1,references:[]});
+  const mergeGhsaNew = mod.ghsaRow({id:'GHSA-new',cve_id:'',severity:'high',summary:'new',published:'2026-08-02',package:'q',ecosystem:'npm',packageCount:1,references:[]});
+  const merged = mod.mergeNvdAndGhsa(mergeNvd, [mergeGhsaDup, mergeGhsaNew]);
+  const mergedIds = merged.map(function(r){return r.id}).sort().join(',');
+
   // --- alertRow ---
   const alert = mod.alertRow({title:'NCSC-2026-0001 advisory',link:'https://example.com',date:'2026-08-15'});
   const alertType = alert.type;
@@ -293,13 +311,14 @@ model_test=$(node -e "
   const duckTypedCve = mod.firstCve({cves: arrayLike});
   const duckTypedExploit = mod.hasExploit({exploitTitles: (function() { return arguments; })('t1')});
 
-  // --- buildRows with 5 sources ---
+  // --- buildRows with 6 sources ---
   const allRows = mod.buildRows(
     {advisories:[{name:'A1',severity:'High',packages:'p',fixed:'1.0',issues:['CVE-1'],date:'2026-01-01'}]},
     {vulnerabilities:[{cveID:'CVE-2',vendorProject:'X',product:'Y',vulnerabilityName:'Z',dateAdded:'2026-08-01'}]},
     {cves:[{id:'CVE-3',severity:'High',score:7.5,description:'D',published:'2026-08-10'}]},
     {advisories:[{title:'Alert 1',link:'https://l',date:'2026-08-12'}]},
-    {findings:[{id:'GHSA-zzzz',ecosystem:'npm',package:'p',version:'1.0',summary:'s',severity:'HIGH',references:[],aliases:[]}]}
+    {findings:[{id:'GHSA-zzzz',ecosystem:'npm',package:'p',version:'1.0',summary:'s',severity:'HIGH',references:[],aliases:[]}]},
+    {advisories:[{id:'GHSA-yyyy',cve_id:'',severity:'high',summary:'s2',published:'2026-08-13',package:'q',ecosystem:'npm',packageCount:1,references:[]}]}
   );
   const rowTypes = allRows.map(function(r){return r.type}).sort().join(',');
 
@@ -324,6 +343,10 @@ model_test=$(node -e "
     pkgVersions: pkgVersions,
     pkgCount: pkgCount,
     sortedNames: sortedNames,
+    ghsaWithCveType: ghsaWithCveType, ghsaWithCveSeverity: ghsaWithCveSeverity,
+    ghsaWithCveCve: ghsaWithCveCve, ghsaWithCveDesc: ghsaWithCveDesc,
+    ghsaNoCveCve: ghsaNoCveCve, ghsaNoCveDesc: ghsaNoCveDesc,
+    mergedIds: mergedIds,
     isWatchedTrue: isWatchedTrue, isWatchedFalse: isWatchedFalse,
     isDismissedTrue: isDismissedTrue, isDismissedFalse: isDismissedFalse,
     dismissKeptIds: dismissKeptIds, dismissAfterWatchOverride: dismissAfterWatchOverride,
@@ -372,10 +395,24 @@ if [[ -n $model_test ]]; then
     jq -e '.nvdType == "nvd"' <<<"$model_test"
   t "SentryModel.nvdRow: preserves score" \
     jq -e '.nvdScore == 9.8' <<<"$model_test"
+  t "SentryModel.ghsaRow: type is ghsa" \
+    jq -e '.ghsaWithCveType == "ghsa"' <<<"$model_test"
+  t "SentryModel.ghsaRow: severity uppercased" \
+    jq -e '.ghsaWithCveSeverity == "HIGH"' <<<"$model_test"
+  t "SentryModel.ghsaRow: firstCve picks up cve_id when present" \
+    jq -e '.ghsaWithCveCve == "CVE-2026-7000"' <<<"$model_test"
+  t "SentryModel.ghsaRow: description carries an ecosystem/package tag" \
+    jq -e '.ghsaWithCveDesc | contains("[npm · lodash]")' <<<"$model_test"
+  t "SentryModel.ghsaRow: firstCve empty when cve_id is blank" \
+    jq -e '.ghsaNoCveCve == ""' <<<"$model_test"
+  t "SentryModel.ghsaRow: '\''+N more'\'' suffix for multi-package advisories" \
+    jq -e '.ghsaNoCveDesc | contains("+2 more")' <<<"$model_test"
+  t "SentryModel.mergeNvdAndGhsa: drops a GHSA entry duplicating an NVD CVE" \
+    jq -e '.mergedIds == "CVE-2026-8000,GHSA-new"' <<<"$model_test"
   t "SentryModel.alertRow: type is alert" \
     jq -e '.alertType == "alert"' <<<"$model_test"
-  t "SentryModel.buildRows: 5 source types" \
-    jq -e '.rowTypes == "alert,arch,kev,nvd,osv"' <<<"$model_test"
+  t "SentryModel.buildRows: 6 source types" \
+    jq -e '.rowTypes == "alert,arch,ghsa,kev,nvd,osv"' <<<"$model_test"
   t "SentryModel.osvRow: type is osv" \
     jq -e '.osvType == "osv"' <<<"$model_test"
   t "SentryModel.osvRow: firstCve picks up a CVE alias when present" \
@@ -551,6 +588,29 @@ unset SENTRY_TEST_NPM SENTRY_TEST_PIP SENTRY_TEST_CARGO SENTRY_TEST_GO
 export XDG_RUNTIME_DIR="$old_runtime"
 
 echo
+echo "== ghsa-fetch live =="
+
+env6=$(new_env)
+mkdir -p "$env6/cache/omarchy-cyber-sentry"
+export XDG_RUNTIME_DIR="$env6/cache"
+
+ghsa_out=$(./ghsa-fetch --force 2>&1)
+ghsa_json=$(jq -c . <<<"$ghsa_out" 2>/dev/null || echo "{}")
+
+t "ghsa-fetch returns ok:true with a non-trivial count" \
+  jq -e '.ok == true and (.count > 50)' <<<"$ghsa_json"
+t "ghsa-fetch advisories are deduplicated by id" \
+  jq -e '(.advisories | length) == (.advisories | map(.id) | unique | length)' <<<"$ghsa_json"
+t "ghsa-fetch advisory carries id, severity, summary, and published date" \
+  jq -e '.advisories[0] | (.id | startswith("GHSA-")) and (.severity | length > 0) and (.summary | length > 0) and (.published | length > 0)' <<<"$ghsa_json"
+t "ghsa-fetch includes at least one advisory with no CVE assigned" \
+  jq -e '[.advisories[] | select(.cve_id == "")] | length > 0' <<<"$ghsa_json"
+t "ghsa-fetch severity values are only high or critical" \
+  jq -e '[.advisories[].severity] | unique | (. - ["high","critical"]) | length == 0' <<<"$ghsa_json"
+
+export XDG_RUNTIME_DIR="$old_runtime"
+
+echo
 echo "== alerts-fetch fixture =="
 
 env3=$(new_env)
@@ -598,9 +658,9 @@ echo
 echo "== manifest.json =="
 
 t "manifest.json is valid JSON" \
-  jq -e '.schemaVersion == 1 and .version == "2.3.0"' "$(dirname "$0")/../manifest.json"
+  jq -e '.schemaVersion == 1 and .version == "2.4.0"' "$(dirname "$0")/../manifest.json"
 t "manifest.json has all new settings" \
-  jq -e '(.barWidget.defaults.nvdEnabled != null) and (.barWidget.defaults.alertsEnabled != null) and (.barWidget.defaults.epssEnabled != null) and (.barWidget.defaults.exploitdbEnabled != null) and (.barWidget.defaults.showKevBadge != null) and (.barWidget.defaults.kevRecentDays != null) and (.barWidget.defaults.kevAffectsMeOnly != null) and (.barWidget.defaults.osvEnabled != null)' "$(dirname "$0")/../manifest.json"
+  jq -e '(.barWidget.defaults.nvdEnabled != null) and (.barWidget.defaults.alertsEnabled != null) and (.barWidget.defaults.epssEnabled != null) and (.barWidget.defaults.exploitdbEnabled != null) and (.barWidget.defaults.showKevBadge != null) and (.barWidget.defaults.kevRecentDays != null) and (.barWidget.defaults.kevAffectsMeOnly != null) and (.barWidget.defaults.osvEnabled != null) and (.barWidget.defaults.ghsaEnabled != null)' "$(dirname "$0")/../manifest.json"
 t "manifest.json has the trend/watchlist/digest/dnd settings" \
   jq -e '(.barWidget.defaults.showTrend != null) and (.barWidget.defaults.digestEnabled != null) and (.barWidget.defaults.digestIntervalDays != null) and (.barWidget.defaults.dndEnabled != null) and (.barWidget.defaults.dndStart != null) and (.barWidget.defaults.dndEnd != null)' "$(dirname "$0")/../manifest.json"
 t "manifest.json schema keys match defaults keys exactly" \

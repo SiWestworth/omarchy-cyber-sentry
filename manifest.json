@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cyber.sentry",
   "name": "Cyber Sentry",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "author": "futuresi",
   "license": "MIT",
   "description": "Cybersecurity threat intelligence: which exploited-in-the-wild vulnerabilities affect the packages installed on this machine, with CISA KEV, CVE detail, EPSS exploit-probability scores, NVD recent CVEs, ExploitDB public exploits, NCSC-NL vendor advisories, and OSV.dev coverage for global pip/npm/cargo/go packages.",
@@ -22,6 +22,7 @@
     "ncsc",
     "advisories",
     "osv",
+    "ghsa",
     "pip",
     "npm",
     "cargo",
@@ -49,6 +50,7 @@
       "epssEnabled": true,
       "exploitdbEnabled": true,
       "osvEnabled": true,
+      "ghsaEnabled": true,
       "notifyOnAffected": true,
       "notifyOnKev": true,
       "notifyOnNvd": false,
@@ -122,6 +124,12 @@
         "key": "osvEnabled",
         "type": "boolean",
         "label": "Scan global pip/npm/cargo/go packages against OSV.dev",
+        "defaultValue": true
+      },
+      {
+        "key": "ghsaEnabled",
+        "type": "boolean",
+        "label": "Merge GitHub Security Advisories into the Recent tab",
         "defaultValue": true
       },
       {

@@ -18,6 +18,7 @@ It correlates live security data against the packages actually installed on this
 | **Arch Security Tracker** | Advisories for your installed packages — only those with a version *below* the fixed version, or with no fix released yet. Stale/"past vulnerable" entries that no longer apply are silently excluded. |
 | **CISA KEV** | Every vulnerability the U.S. government's CISA knows is being actively exploited in the wild, updated as new entries are added. Cross-checked against your installed packages with a fuzzy vendor/product match. |
 | **NVD (recent)** | Recently published High/Critical CVEs from the National Vulnerability Database's REST API. |
+| **GHSA (recent)** | Recent High/Critical GitHub Security Advisories, merged into the Recent tab alongside NVD (deduplicated by CVE) — often lands days before NVD enriches the matching CVE, and is the canonical source for ecosystem/Actions advisories that never get a CVE at all. |
 | **EPSS** | Exploit-probability scores enriching every CVE-bearing row, so you can tell "technically vulnerable" from "actually likely to be exploited." |
 | **ExploitDB** | Flags rows that have a known public exploit on file. |
 | **NCSC-NL Alerts** | Vendor security advisories from the Dutch National Cyber Security Centre. |
@@ -48,6 +49,21 @@ genuinely separate coverage area from the rest of the panel: OSV.dev has no
 "Arch Linux" ecosystem, so it complements Arch Security Tracker rather than
 overlapping it — official Arch packages are still Arch Security Tracker's
 job.
+
+## Recent tab: NVD + GHSA merged
+
+The **Recent** tab combines NVD's recent High/Critical CVEs with GitHub's
+recent High/Critical Security Advisories (GHSA) into one feed, sorted by
+severity together. If the same CVE shows up in both sources, only the NVD
+entry is kept — GHSA rows only add to the list when they cover something
+NVD doesn't yet (or never will, for advisories with no CVE assigned at
+all). GHSA rows show the affected ecosystem and package inline (e.g.
+`[npm · lodash]`) so you can tell them apart from NVD's plain CVE rows at a
+glance. This is deliberately *not* limited to the ecosystems the Dev tab
+scans — GHSA also covers RubyGems, Maven, NuGet, Composer, GitHub Actions,
+and more, none of which this panel scans your machine for directly, so
+Recent works as a broader "what's happening" feed rather than a
+per-package correlation like the Dev tab.
 
 ## One-click remediation
 
@@ -160,6 +176,7 @@ Open the Omarchy settings UI and configure these under the **Cyber Sentry** sect
 | Show EPSS scores | on | Toggle exploit-probability scores on CVE-bearing rows |
 | Check ExploitDB | on | Toggle the public-exploit lookup |
 | Scan dev packages (OSV.dev) | on | Toggle the pip/npm/cargo/go global-package scan |
+| Merge GHSA into Recent | on | Toggle GitHub Security Advisories in the Recent tab |
 | Notify on affected | on | Desktop notification when a new advisory affects an installed package |
 | Notify on KEV | on | Desktop notification when a new KEV entry is added |
 | Notify on NVD | off | Desktop notification on new High/Critical NVD CVEs |

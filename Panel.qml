@@ -41,6 +41,7 @@ Panel {
   readonly property string nvdPath: Qt.resolvedUrl("nvd-fetch").toString().replace(/^file:\/\//, "")
   readonly property string alertsPath: Qt.resolvedUrl("alerts-fetch").toString().replace(/^file:\/\//, "")
   readonly property string osvPath: Qt.resolvedUrl("osv-fetch").toString().replace(/^file:\/\//, "")
+  readonly property string ghsaPath: Qt.resolvedUrl("ghsa-fetch").toString().replace(/^file:\/\//, "")
 
   readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy/settings"
   readonly property string configPath: stateDir + "/cyber-sentry.json"
@@ -66,6 +67,7 @@ Panel {
   readonly property bool epssEnabled: setting("epssEnabled", true)
   readonly property bool exploitdbEnabled: setting("exploitdbEnabled", true)
   readonly property bool osvEnabled: setting("osvEnabled", true)
+  readonly property bool ghsaEnabled: setting("ghsaEnabled", true)
   readonly property bool notifyOnAffected: setting("notifyOnAffected", true)
   readonly property bool notifyOnKev: setting("notifyOnKev", true)
   readonly property bool notifyOnNvd: setting("notifyOnNvd", false)
@@ -91,6 +93,7 @@ Panel {
   property var epssParsed: null
   property var exploitdbParsed: null
   property var osvParsed: null
+  property var ghsaParsed: null
   property var installedMap: ({})
   property var aurPackages: []
   // Never fold into totalBadge/urgent color below: these are real installed
@@ -104,6 +107,7 @@ Panel {
   property bool epssFetching: false
   property bool exploitdbFetching: false
   property bool osvFetching: false
+  property bool ghsaFetching: false
   property var notified: ({})
   property real lastDigestAt: 0
   property bool stateLoaded: false
@@ -120,7 +124,7 @@ Panel {
   property var userConfig: ({})
   property bool configLoaded: false
 
-  readonly property bool refreshing: archFetching || kevFetching || nvdFetching || alertsFetching || epssFetching || exploitdbFetching || osvFetching
+  readonly property bool refreshing: archFetching || kevFetching || nvdFetching || alertsFetching || epssFetching || exploitdbFetching || osvFetching || ghsaFetching
   readonly property bool paused: conf("paused", false)
 
   // --- config / settings lookups -------------------------------------------
@@ -169,7 +173,7 @@ Panel {
 
   // --- derived data ----------------------------------------------------------
   property var enrichedRows: {
-    var r = SentryModel.buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed)
+    var r = SentryModel.buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed, ghsaParsed)
     if (epssParsed) r = SentryModel.epssMerge(r, epssParsed)
     if (exploitdbParsed) r = SentryModel.exploitMerge(r, exploitdbParsed)
     if (Object.keys(installedMap).length > 0) r = SentryModel.installMerge(r, installedMap)
@@ -223,7 +227,9 @@ Panel {
   }
   readonly property var nvdRows: SentryModel.sortBySeverity(
     SentryModel.filterOutDismissed(
-      SentryModel.filterByThresholdOrWatched(SentryModel.nvdRows(enrichedRows), severityThreshold, watchlist),
+      SentryModel.filterByThresholdOrWatched(
+        SentryModel.mergeNvdAndGhsa(SentryModel.nvdRows(enrichedRows), SentryModel.ghsaRows(enrichedRows)),
+        severityThreshold, watchlist),
       dismissed)
   ).slice(0, maxItems)
   readonly property var alertRows: SentryModel.sortByDateDesc(SentryModel.alertRows(enrichedRows)).slice(0, maxItems)
@@ -306,8 +312,15 @@ Panel {
     return SentryModel.sourceOk(osvParsed) ? "ok" : "error"
   }
 
+  readonly property string ghsaStatusLabel: {
+    if (!ghsaEnabled) return "off"
+    if (ghsaFetching) return "syncing"
+    if (ghsaParsed === null) return "idle"
+    return SentryModel.sourceOk(ghsaParsed) ? "ok" : "error"
+  }
+
   readonly property string lastUpdatedText: {
-    var sources = [archParsed, kevParsed, nvdParsed, alertsParsed, epssParsed, exploitdbParsed, osvParsed]
+    var sources = [archParsed, kevParsed, nvdParsed, alertsParsed, epssParsed, exploitdbParsed, osvParsed, ghsaParsed]
     var newest = ""
     for (var i = 0; i < sources.length; i++) {
       var t = SentryModel.checkedAt(sources[i])
@@ -363,6 +376,11 @@ Panel {
       osvFetching = true
       osvProcess.command = [osvPath]
       osvProcess.running = true
+    }
+    if (ghsaEnabled && !ghsaFetching) {
+      ghsaFetching = true
+      ghsaProcess.command = [ghsaPath]
+      ghsaProcess.running = true
     }
     // EPSS runs after other sources (needs CVE list from their caches)
     if (epssEnabled && !epssFetching) {
@@ -502,6 +520,20 @@ Panel {
     initialized = true
   }
 
+  function applyGhsa(exitCode, out, err) {
+    ghsaFetching = false
+    var parsed = null
+    if (exitCode === 0) {
+      try { parsed = JSON.parse(String(out || "")) } catch (e) { parsed = null }
+    }
+    if (!parsed || parsed.ok !== true) {
+      var detail = String(err || "").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "")
+      parsed = { ok: false, source: "ghsa", error: detail !== "" ? detail : "ghsa-fetch exited " + exitCode }
+    }
+    ghsaParsed = parsed
+    initialized = true
+  }
+
   // --- notifications --------------------------------------------------------
   function evaluateNotifications(type) {
     // Bootstrap suppression: on the very first successful fetch, mark all items
@@ -509,7 +541,7 @@ Panel {
     if (!bootstrapDone) {
       if (SentryModel.sourceOk(archParsed) && SentryModel.sourceOk(kevParsed)) {
         bootstrapDone = true
-        var allRows = SentryModel.buildRows(archParsed, kevParsed, null, null, null)
+        var allRows = SentryModel.buildRows(archParsed, kevParsed, null, null, null, null)
         SentryModel.markAllSeen(allRows, notified, Date.now())
         saveNotifyState()
         return
@@ -599,12 +631,18 @@ Panel {
   function openCveDetail(row) {
     cveDetailFix = SentryModel.archFixState(row)
 
-    // OSV findings already carry their full description/severity/references
+    // OSV findings always carry their full description/severity/references
     // straight from osv-fetch's one-shot /v1/query call — no on-demand
     // cve.org lookup needed (and OSV ids like GHSA-/PYSEC-/RUSTSEC- aren't
-    // CVE ids cve-fetch could look up anyway).
-    if (row && row.type === "osv") {
-      cveDetailTitle = row.ecosystem + " · " + row.packages + " " + row.version + " · " + row.id
+    // CVE ids cve-fetch could look up anyway). GHSA rows get the same
+    // treatment only when they have no CVE alias — a GHSA row that does
+    // have one falls through to the normal cve.org lookup below instead,
+    // matching how NVD rows (which it's merged alongside in Recent) work.
+    var noCveGhsa = row && row.type === "ghsa" && !SentryModel.firstCve(row)
+    if (row && (row.type === "osv" || noCveGhsa)) {
+      cveDetailTitle = row.type === "osv"
+        ? (row.ecosystem + " · " + row.packages + " " + row.version + " · " + row.id)
+        : row.id
       var refText = (row.references && row.references.length > 0)
         ? "\n\nReferences:\n" + row.references.join("\n") : ""
       cveDetailText = (row.description || "No description available.")
@@ -786,6 +824,15 @@ Panel {
     stdout: StdioCollector { id: osvStdout; waitForEnd: true }
     stderr: StdioCollector { id: osvStderr; waitForEnd: true }
     onExited: function(exitCode) { root.applyOsv(exitCode, osvStdout.text, osvStderr.text) }
+  }
+
+  Process {
+    id: ghsaProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: ghsaStdout; waitForEnd: true }
+    stderr: StdioCollector { id: ghsaStderr; waitForEnd: true }
+    onExited: function(exitCode) { root.applyGhsa(exitCode, ghsaStdout.text, ghsaStderr.text) }
   }
 
   Process {
@@ -1011,6 +1058,7 @@ Panel {
             StatusPill { pillLabel: "EDB"; pillState: root.exploitdbStatusLabel }
             StatusPill { pillLabel: "ALERT"; pillState: root.alertsStatusLabel }
             StatusPill { pillLabel: "OSV"; pillState: root.osvStatusLabel }
+            StatusPill { pillLabel: "GHSA"; pillState: root.ghsaStatusLabel }
           }
 
           Text {

@@ -1,0 +1,102 @@
+#!/bin/bash
+
+# GitHub Security Advisory (GHSA) database — recent high/critical feed.
+#
+# Usage: ghsa-fetch [--force]
+#
+# Fetches reviewed (not unreviewed/malware) advisories at High and Critical
+# severity, sorted newest-first. No API key needed for read access. GHSA
+# often carries an advisory days before the matching NVD CVE record is
+# enriched, and is the canonical source for many ecosystem-only advisories
+# that never get a CVE at all (GitHub Actions, and plenty of npm/PyPI/etc.
+# issues) — this is deliberately merged into the Recent tab alongside NVD
+# rather than per-package correlated, since GHSA's npm/PyPI/crates.io/Go
+# data is exactly what osv-fetch already surfaces for installed packages.
+#
+# Prints {"ok":true,"source":"ghsa","count":N,"checkedAt":...,"advisories":[...]}
+# or {"ok":false,"error":"..."} — exiting 0 either way.
+
+set -uo pipefail
+
+readonly BASE_URL="https://api.github.com/advisories"
+readonly UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0"
+readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
+readonly CACHE_FILE="$CACHE_DIR/ghsa-recent.json"
+readonly TTL="${SENTRY_GHSA_TTL:-3600}"
+readonly PER_PAGE=100
+readonly MAX_BYTES=8388608
+
+source "${BASH_SOURCE[0]%/*}/_sentry-lib.sh"
+
+die() {
+  "$SENTRY_BIN_JQ" -cn --arg m "$1" '{ok:false, source:"ghsa", error:$m}'
+  exit 0
+}
+
+sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use"
+
+needs_refresh() {
+  [[ -s $CACHE_FILE ]] || return 0
+  local now age
+  now=$("$SENTRY_BIN_DATE" +%s)
+  age=$((now - $("$SENTRY_BIN_STAT" -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
+  (( age >= TTL ))
+}
+
+if [[ ${1:-} == --force ]] || needs_refresh; then
+  tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
+
+  all_results="[]"
+  for severity in high critical; do
+    url="${BASE_URL}?type=reviewed&severity=${severity}&sort=published&direction=desc&per_page=${PER_PAGE}"
+
+    raw=$("$SENTRY_BIN_CURL" -fsSL --max-time 20 --max-filesize "$MAX_BYTES" \
+      "${SENTRY_CURL_HTTPS_ONLY[@]}" \
+      -A "$UA" -H "Accept: application/vnd.github+json" "$url" 2>/dev/null)
+
+    if [[ -n $raw ]]; then
+      batch=$(printf '%s' "$raw" | "$SENTRY_BIN_JQ" -c '
+        [.[]? | {
+          id: .ghsa_id,
+          cve_id: (.cve_id // ""),
+          severity: (.severity // "unknown"),
+          summary: (.summary // ""),
+          published: (.published_at // ""),
+          score: (
+            (.cvss_severities.cvss_v3.score // null) as $v3 |
+            if $v3 != null and $v3 > 0 then $v3
+            else ((.cvss_severities.cvss_v4.score // null) as $v4 | if $v4 != null and $v4 > 0 then $v4 else null end)
+            end
+          ),
+          references: ([.references[]? | if type == "object" then (.url // "") else . end]
+            | map(select(length > 0)) | .[0:5]),
+          package: (.vulnerabilities[0].package.name // ""),
+          ecosystem: (.vulnerabilities[0].package.ecosystem // ""),
+          packageCount: ((.vulnerabilities // []) | length)
+        }]' 2>/dev/null)
+
+      if [[ -n $batch ]]; then
+        all_results=$(printf '%s' "$all_results" "$batch" | "$SENTRY_BIN_JQ" -sc '.[0] + .[1]')
+      fi
+    fi
+  done
+
+  deduped=$(printf '%s' "$all_results" | "$SENTRY_BIN_JQ" -c '
+    unique_by(.id) | sort_by(.published) | reverse
+  ' 2>/dev/null)
+
+  [[ -n $deduped ]] || die "GHSA API returned no results"
+
+  printf '%s' "$deduped" | "$SENTRY_BIN_JQ" -c --arg checked "$("$SENTRY_BIN_DATE" -u +%FT%TZ)" \
+    '{ok:true, source:"ghsa", count:length, checkedAt:$checked, advisories:.}' > "$tmp" 2>/dev/null
+
+  [[ -s $tmp ]] && "$SENTRY_BIN_MV" -f "$tmp" "$CACHE_FILE"
+fi
+
+[[ -s $CACHE_FILE ]] || die "GHSA cache is empty"
+sentry_safe_regular_file "$CACHE_FILE" || die "cache file is not safe to read"
+
+"$SENTRY_BIN_JQ" -e 'type=="object" and (.advisories | type=="array")' "$CACHE_FILE" >/dev/null 2>&1 ||
+  die "GHSA cache contains unparseable data"
+
+"$SENTRY_BIN_CAT" "$CACHE_FILE"
