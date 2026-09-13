@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cyber.sentry",
   "name": "Cyber Sentry",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "author": "futuresi",
   "license": "MIT",
   "description": "Cybersecurity threat intelligence: which exploited-in-the-wild vulnerabilities affect the packages installed on this machine, with CISA KEV, CVE detail, EPSS exploit-probability scores, NVD recent CVEs, ExploitDB public exploits, and NCSC-NL vendor advisories.",
@@ -52,7 +52,13 @@
       "showBadge": true,
       "showKevBadge": false,
       "kevRecentDays": 90,
-      "kevAffectsMeOnly": false
+      "kevAffectsMeOnly": false,
+      "showTrend": true,
+      "digestEnabled": true,
+      "digestIntervalDays": 7,
+      "dndEnabled": false,
+      "dndStart": "22:00",
+      "dndEnd": "07:00"
     },
     "schema": [
       {
@@ -174,6 +180,45 @@
         "type": "boolean",
         "label": "KEV tab: only show entries matching installed packages",
         "defaultValue": false
+      },
+      {
+        "key": "showTrend",
+        "type": "boolean",
+        "label": "Show the exposure trend sparkline",
+        "defaultValue": true
+      },
+      {
+        "key": "digestEnabled",
+        "type": "boolean",
+        "label": "Send a periodic digest notification",
+        "defaultValue": true
+      },
+      {
+        "key": "digestIntervalDays",
+        "type": "integer",
+        "label": "Days between digest notifications",
+        "min": 1,
+        "max": 30,
+        "step": 1,
+        "defaultValue": 7
+      },
+      {
+        "key": "dndEnabled",
+        "type": "boolean",
+        "label": "Enable a do-not-disturb notification schedule",
+        "defaultValue": false
+      },
+      {
+        "key": "dndStart",
+        "type": "string",
+        "label": "Do-not-disturb start time (HH:MM)",
+        "defaultValue": "22:00"
+      },
+      {
+        "key": "dndEnd",
+        "type": "string",
+        "label": "Do-not-disturb end time (HH:MM)",
+        "defaultValue": "07:00"
       }
     ]
   }

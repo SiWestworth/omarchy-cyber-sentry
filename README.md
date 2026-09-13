@@ -38,6 +38,46 @@ sync state — and nothing ever runs without you explicitly clicking it; "Run in
 terminal" opens a floating terminal so you confirm and enter your own `sudo`
 password interactively.
 
+## Exposure trend
+
+A small sparkline in the panel header tracks the affected-package badge count
+over time, so you can see at a glance whether your exposure is trending up or
+down rather than only seeing a single point-in-time snapshot. It appears once
+enough history has been recorded (a couple of refresh cycles) and can be
+turned off in settings.
+
+## CVE watchlist
+
+Click the star next to any Arch/KEV/NVD row to pin it. Watchlisted CVEs
+always show in their tab regardless of your severity threshold, so you can
+track something you care about (a package you run in production, say)
+without lowering the threshold for everything else.
+
+## Weekly digest
+
+A single periodic desktop notification summarizing current counts (affected
+packages, exploited CVEs, recent CVEs), independent of the per-item
+notifications above. Defaults to every 7 days; configurable or can be turned
+off entirely.
+
+## Do-not-disturb
+
+An optional overnight (or any custom window) quiet period during which
+desktop notification popups are suppressed. The badge, panel data, and
+"seen" bookkeeping keep working normally — only the OS popup is held back,
+and nothing floods in once the window ends.
+
+## CLI companion
+
+`cyber-sentry-status`, included in the plugin directory, prints the same
+data as the panel to a terminal — useful over SSH or in scripts, without
+opening the bar panel. Put it on your `PATH`:
+
+```
+ln -s ~/.config/omarchy/plugins/cyber.sentry/cyber-sentry-status ~/.local/bin/cyber-sentry
+cyber-sentry
+```
+
 ## Install
 
 ```
@@ -92,6 +132,12 @@ Open the Omarchy settings UI and configure these under the **Cyber Sentry** sect
 | Include KEV in badge | off | Whether the badge count also includes KEV entries |
 | KEV recent window (days) | 90 | How far back the KEV tab looks |
 | KEV: installed only | off | KEV tab shows only entries matching installed packages |
+| Show trend sparkline | on | Toggle the exposure-history sparkline |
+| Send digest notifications | on | Toggle the periodic summary notification |
+| Digest interval (days) | 7 | Days between digest notifications |
+| Enable do-not-disturb | off | Toggle the quiet-hours notification schedule |
+| Do-not-disturb start | 22:00 | Quiet period start time (HH:MM) |
+| Do-not-disturb end | 07:00 | Quiet period end time (HH:MM) |
 
 ## Keyboard shortcuts (while panel is open)
 

@@ -226,6 +226,37 @@ model_test=$(node -e "
   const pkgCount = pkgList.length;
   const sortedNames = mod.sortByName([{name:'zeta'},{name:'alpha'},{name:'Middle'}]).map(function(p){return p.name}).join(',');
 
+  // --- watchlist ---
+  const watchRow = mod.archRow({name:'AVG-99',severity:'Low',packages:'p',fixed:'1.0',cves:['CVE-2026-9999'],date:'2026-01-01'});
+  const watchlist = ['CVE-2026-9999'];
+  const isWatchedTrue = mod.isWatched(watchRow, watchlist);
+  const isWatchedFalse = mod.isWatched(watchRow, []);
+  const thresholdRows = [watchRow, mod.archRow({name:'AVG-98',severity:'Low',packages:'q',fixed:'1.0',cves:['CVE-2026-9998'],date:'2026-01-01'})];
+  const filteredKeptIds = mod.filterByThresholdOrWatched(thresholdRows, 'High', watchlist).map(function(r){return r.id}).join(',');
+
+  // --- trend history ---
+  var hist = [];
+  hist = mod.appendHistoryPoint(hist, {t:'2026-01-01T00:00:00Z', badgeCount:1, kevCount:2}, 3);
+  hist = mod.appendHistoryPoint(hist, {t:'2026-01-02T00:00:00Z', badgeCount:2, kevCount:3}, 3);
+  hist = mod.appendHistoryPoint(hist, {t:'2026-01-03T00:00:00Z', badgeCount:3, kevCount:4}, 3);
+  hist = mod.appendHistoryPoint(hist, {t:'2026-01-04T00:00:00Z', badgeCount:4, kevCount:5}, 3);
+  const histLen = hist.length;
+  const histFirstBadge = hist[0].badgeCount;
+
+  const sparkFlat = mod.sparklinePoints([{badgeCount:5},{badgeCount:5}], 100, 20, 2);
+  const sparkFlatYsMatch = sparkFlat.length === 2 && sparkFlat[0].y === sparkFlat[1].y;
+  const sparkRange = mod.sparklinePoints([{badgeCount:0},{badgeCount:10}], 100, 20, 2);
+  const sparkRangeMonotonic = sparkRange[1].x > sparkRange[0].x;
+  const sparkEmptyLen = mod.sparklinePoints([], 100, 20, 2).length;
+
+  // --- do-not-disturb ---
+  const dndSameDayIn = mod.isWithinDnd('09:00', '17:00', new Date(2026,0,1,12,0));
+  const dndSameDayOut = mod.isWithinDnd('09:00', '17:00', new Date(2026,0,1,20,0));
+  const dndOvernightLateIn = mod.isWithinDnd('22:00', '07:00', new Date(2026,0,1,23,0));
+  const dndOvernightEarlyIn = mod.isWithinDnd('22:00', '07:00', new Date(2026,0,1,3,0));
+  const dndOvernightOut = mod.isWithinDnd('22:00', '07:00', new Date(2026,0,1,12,0));
+  const dndBadInput = mod.isWithinDnd('bad', '07:00', new Date(2026,0,1,23,0));
+
   // --- buildRows with 4 sources ---
   const allRows = mod.buildRows(
     {advisories:[{name:'A1',severity:'High',packages:'p',fixed:'1.0',issues:['CVE-1'],date:'2026-01-01'}]},
@@ -255,7 +286,14 @@ model_test=$(node -e "
     pkgNames: pkgNames,
     pkgVersions: pkgVersions,
     pkgCount: pkgCount,
-    sortedNames: sortedNames
+    sortedNames: sortedNames,
+    isWatchedTrue: isWatchedTrue, isWatchedFalse: isWatchedFalse,
+    filteredKeptIds: filteredKeptIds,
+    histLen: histLen, histFirstBadge: histFirstBadge,
+    sparkFlatYsMatch: sparkFlatYsMatch, sparkRangeMonotonic: sparkRangeMonotonic, sparkEmptyLen: sparkEmptyLen,
+    dndSameDayIn: dndSameDayIn, dndSameDayOut: dndSameDayOut,
+    dndOvernightLateIn: dndOvernightLateIn, dndOvernightEarlyIn: dndOvernightEarlyIn, dndOvernightOut: dndOvernightOut,
+    dndBadInput: dndBadInput
   }));
 " "$(dirname "$0")/../SentryModel.js" 2>/dev/null)
 
@@ -314,6 +352,34 @@ if [[ -n $model_test ]]; then
     jq -e '.pkgCount == 3' <<<"$model_test"
   t "SentryModel.sortByName: case-insensitive alphabetical order" \
     jq -e '.sortedNames == "alpha,Middle,zeta"' <<<"$model_test"
+  t "SentryModel.isWatched: true when CVE is in the watchlist" \
+    jq -e '.isWatchedTrue == true' <<<"$model_test"
+  t "SentryModel.isWatched: false for an empty watchlist" \
+    jq -e '.isWatchedFalse == false' <<<"$model_test"
+  t "SentryModel.filterByThresholdOrWatched: keeps a watched row below threshold" \
+    jq -e '.filteredKeptIds == "AVG-99"' <<<"$model_test"
+  t "SentryModel.appendHistoryPoint: caps length at maxPoints" \
+    jq -e '.histLen == 3' <<<"$model_test"
+  t "SentryModel.appendHistoryPoint: drops oldest point first" \
+    jq -e '.histFirstBadge == 2' <<<"$model_test"
+  t "SentryModel.sparklinePoints: flat series renders equal y values" \
+    jq -e '.sparkFlatYsMatch == true' <<<"$model_test"
+  t "SentryModel.sparklinePoints: x increases across points" \
+    jq -e '.sparkRangeMonotonic == true' <<<"$model_test"
+  t "SentryModel.sparklinePoints: empty history yields no points" \
+    jq -e '.sparkEmptyLen == 0' <<<"$model_test"
+  t "SentryModel.isWithinDnd: same-day window matches inside" \
+    jq -e '.dndSameDayIn == true' <<<"$model_test"
+  t "SentryModel.isWithinDnd: same-day window excludes outside" \
+    jq -e '.dndSameDayOut == false' <<<"$model_test"
+  t "SentryModel.isWithinDnd: overnight window matches late evening" \
+    jq -e '.dndOvernightLateIn == true' <<<"$model_test"
+  t "SentryModel.isWithinDnd: overnight window matches early morning" \
+    jq -e '.dndOvernightEarlyIn == true' <<<"$model_test"
+  t "SentryModel.isWithinDnd: overnight window excludes midday" \
+    jq -e '.dndOvernightOut == false' <<<"$model_test"
+  t "SentryModel.isWithinDnd: malformed time input fails open (false)" \
+    jq -e '.dndBadInput == false' <<<"$model_test"
 else
   echo "  SKIP  SentryModel.js (node unavailable)"
 fi
@@ -417,9 +483,13 @@ echo
 echo "== manifest.json =="
 
 t "manifest.json is valid JSON" \
-  jq -e '.schemaVersion == 1 and .version == "2.1.0"' "$(dirname "$0")/../manifest.json"
+  jq -e '.schemaVersion == 1 and .version == "2.2.0"' "$(dirname "$0")/../manifest.json"
 t "manifest.json has all new settings" \
   jq -e '(.barWidget.defaults.nvdEnabled != null) and (.barWidget.defaults.alertsEnabled != null) and (.barWidget.defaults.epssEnabled != null) and (.barWidget.defaults.exploitdbEnabled != null) and (.barWidget.defaults.showKevBadge != null) and (.barWidget.defaults.kevRecentDays != null) and (.barWidget.defaults.kevAffectsMeOnly != null)' "$(dirname "$0")/../manifest.json"
+t "manifest.json has the trend/watchlist/digest/dnd settings" \
+  jq -e '(.barWidget.defaults.showTrend != null) and (.barWidget.defaults.digestEnabled != null) and (.barWidget.defaults.digestIntervalDays != null) and (.barWidget.defaults.dndEnabled != null) and (.barWidget.defaults.dndStart != null) and (.barWidget.defaults.dndEnd != null)' "$(dirname "$0")/../manifest.json"
+t "manifest.json schema keys match defaults keys exactly" \
+  jq -e '(.barWidget.defaults | keys | sort) == (.barWidget.schema | map(.key) | sort)' "$(dirname "$0")/../manifest.json"
 
 echo
 echo "== result: $pass passed, $fail failed =="

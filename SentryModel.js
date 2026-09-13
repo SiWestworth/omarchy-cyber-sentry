@@ -51,6 +51,25 @@ function affectedCount(archParsed, threshold) {
   return filterByThreshold(list, threshold).length
 }
 
+// True if this row's primary CVE is in the user's watchlist. Rows with no
+// CVE (alerts) are never watchable.
+function isWatched(row, watchlist) {
+  if (!watchlist || watchlist.length === 0) return false
+  var cve = firstCve(row)
+  return !!cve && watchlist.indexOf(cve) >= 0
+}
+
+// Like filterByThreshold, but a watchlisted row is always kept regardless of
+// severity — pinning a CVE means "always show me this," not "show me this
+// if it's also otherwise severe enough." Only used for the visible System/
+// Recent lists; the badge count and notifications intentionally keep using
+// plain filterByThreshold since those are about "what needs attention now."
+function filterByThresholdOrWatched(rows, threshold, watchlist) {
+  return rows.filter(function(r) {
+    return meetsThreshold(r.severity, threshold) || isWatched(r, watchlist)
+  })
+}
+
 // --- Row builders ----------------------------------------------------------
 
 function archRow(a) {
@@ -278,12 +297,17 @@ function parsePackageList(text) {
 }
 
 function firstCve(row) {
-  if (row && Array.isArray(row.cves) && row.cves.length > 0) return String(row.cves[0])
+  // Deliberately duck-typed rather than Array.isArray(): rows read back out
+  // of a ListView delegate's `modelData` marshal `cves` into a QML sequence
+  // type that fails Array.isArray() even though it's a real, indexable,
+  // non-empty list — Array.isArray() here silently treated every on-screen
+  // row as CVE-less.
+  if (row && row.cves && row.cves.length > 0) return String(row.cves[0])
   return ""
 }
 
 function hasExploit(row) {
-  return row && Array.isArray(row.exploitTitles) && row.exploitTitles.length > 0
+  return !!(row && row.exploitTitles && row.exploitTitles.length > 0)
 }
 
 // Remediation is only ever a full-system update (never a per-package install) —
@@ -401,4 +425,59 @@ function sourceCount(parsed) {
 
 function checkedAt(parsed) {
   return parsed && parsed.checkedAt ? String(parsed.checkedAt) : ""
+}
+
+// --- Trend history -----------------------------------------------------
+
+// Appends a snapshot point and caps the array length, dropping the oldest
+// points first. History is a flat array of {t, badgeCount, kevCount}.
+function appendHistoryPoint(history, point, maxPoints) {
+  var next = Array.isArray(history) ? history.slice() : []
+  next.push(point)
+  if (maxPoints > 0 && next.length > maxPoints) next = next.slice(next.length - maxPoints)
+  return next
+}
+
+// Converts history's badgeCount series into pixel coordinates scaled to fit
+// width x height (with padding so the line never touches the edges), for a
+// Canvas to stroke as a polyline. A flat (all-equal) series renders as a
+// centered horizontal line rather than dividing by zero.
+function sparklinePoints(history, width, height, padding) {
+  var pts = Array.isArray(history) ? history : []
+  if (pts.length === 0) return []
+  var values = pts.map(function(p) { return Number(p.badgeCount) || 0 })
+  var min = Math.min.apply(null, values)
+  var max = Math.max.apply(null, values)
+  var pad = padding || 0
+  var innerW = Math.max(1, width - pad * 2)
+  var innerH = Math.max(1, height - pad * 2)
+  var range = max - min
+  return values.map(function(v, i) {
+    var x = pad + (values.length === 1 ? innerW / 2 : (i / (values.length - 1)) * innerW)
+    var y = range === 0 ? pad + innerH / 2 : pad + innerH - ((v - min) / range) * innerH
+    return { x: x, y: y }
+  })
+}
+
+// --- Do-not-disturb ------------------------------------------------------
+
+// "HH:MM" -> minutes since midnight, or null if unparsable so callers can
+// fail open (treat as "not in DND") rather than misbehave on a bad setting.
+function parseHm(hm) {
+  var m = /^(\d{1,2}):(\d{2})$/.exec(String(hm || "").trim())
+  if (!m) return null
+  var h = parseInt(m[1], 10), mm = parseInt(m[2], 10)
+  if (h < 0 || h > 23 || mm < 0 || mm > 59) return null
+  return h * 60 + mm
+}
+
+// True if `now` falls within the [start, end) window, handling both a
+// same-day window and one that spans midnight (e.g. 22:00-07:00).
+function isWithinDnd(start, end, now) {
+  var s = parseHm(start)
+  var e = parseHm(end)
+  if (s === null || e === null || s === e) return false
+  var nowMinutes = now.getHours() * 60 + now.getMinutes()
+  if (s < e) return nowMinutes >= s && nowMinutes < e
+  return nowMinutes >= s || nowMinutes < e
 }
