@@ -681,7 +681,11 @@ Panel {
     // Absolute path, not ambient-PATH — this fires unattended on every
     // alert, unlike the click-gated actions elsewhere, so it gets the same
     // hardening the fetch scripts already apply to curl/jq/pacman.
-    notificationProcess.command = ["/usr/bin/omarchy-notification-send", "-a", "--app-name", "sentry",
+    // No "-a" flag: this build of omarchy-notification-send doesn't
+    // recognize it (only --app-name), and passing it swallows the
+    // following args and makes the whole call exit 1 — every notification
+    // was silently failing to send because of it.
+    notificationProcess.command = ["/usr/bin/omarchy-notification-send", "--app-name", "sentry",
       "-u", isUrgent ? "critical" : "normal", "-g", shieldGlyph, headline, body]
     notificationProcess.running = true
   }
