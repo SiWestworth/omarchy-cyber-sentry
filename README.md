@@ -7,9 +7,9 @@ It correlates live security data against the packages actually installed on this
 ## Screenshots
 
 <p align="center">
-  <img src="screenshots/exploited-tab.png" width="380" alt="Exploited tab: CISA KEV entries with composite risk badges and EPSS scores">
-  <img src="screenshots/recent-cve-tab.png" width="380" alt="Recent tab: high/critical NVD + GHSA CVEs with CVSS scores">
-  <img src="screenshots/foreign-tab.png" width="380" alt="Foreign tab: AUR and Flatpak packages not covered by Arch Security Tracker">
+  <img src="screenshots/exploited.png" width="380" alt="Exploited tab: CISA KEV entries with composite risk badges and EPSS scores">
+  <img src="screenshots/alerts.png" width="380" alt="Alerts tab: NCSC-NL vendor security advisories">
+  <img src="screenshots/foreign.png" width="380" alt="Foreign tab: AUR and Flatpak packages not covered by Arch Security Tracker">
   <img src="screenshots/cve-detail.png" width="380" alt="CVE detail overlay with description, references, and a Copy report button">
 </p>
 
