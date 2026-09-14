@@ -1207,7 +1207,10 @@ Panel {
             }
           }
 
-          Row {
+          // Flow (not Row) — six pills no longer fit on one line at the
+          // panel's width, and unlike the tab row these are glanceable
+          // status, not something worth requiring a scroll to see the rest.
+          Flow {
             width: parent.width
             spacing: Style.space(6)
 
