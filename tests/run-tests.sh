@@ -225,6 +225,20 @@ model_test=$(node -e "
   const merged = mod.mergeNvdAndGhsa(mergeNvd, [mergeGhsaDup, mergeGhsaNew]);
   const mergedIds = merged.map(function(r){return r.id}).sort().join(',');
 
+  // --- trivyRow ---
+  const trivyWithCve = mod.trivyRow({id:'CVE-2099-0099',image:'postgres:18',target:'postgres:18 (debian 12.5)',package:'openssl',installedVersion:'3.0.11-1',fixedVersion:'3.0.13-1',severity:'high',title:'openssl: test vuln',references:['https://x']});
+  const trivyWithCveType = trivyWithCve.type;
+  const trivyWithCveSeverity = trivyWithCve.severity;
+  const trivyWithCveCve = mod.firstCve(trivyWithCve);
+  const trivyWithCveUnfixed = trivyWithCve.unfixed;
+
+  const trivyNoFix = mod.trivyRow({id:'GHSA-zzzz-yyyy-xxxx',image:'postgres:18',target:'t',package:'foo',installedVersion:'1.0',fixedVersion:'',severity:'critical',title:'no fix yet',references:[]});
+  const trivyNoFixCve = mod.firstCve(trivyNoFix);
+  const trivyNoFixUnfixed = trivyNoFix.unfixed;
+
+  const trivyRowsFiltered = mod.trivyRows([trivyWithCve, mod.archRow({name:'X',severity:'High',packages:'p',fixed:'1.0',cves:['CVE-1'],date:'2026-01-01'})]);
+  const trivyRowsFilteredCount = trivyRowsFiltered.length;
+
   // --- alertRow ---
   const alert = mod.alertRow({title:'NCSC-2026-0001 advisory',link:'https://example.com',date:'2026-08-15'});
   const alertType = alert.type;
@@ -359,14 +373,15 @@ model_test=$(node -e "
   const duckTypedCve = mod.firstCve({cves: arrayLike});
   const duckTypedExploit = mod.hasExploit({exploitTitles: (function() { return arguments; })('t1')});
 
-  // --- buildRows with 6 sources ---
+  // --- buildRows with 7 sources ---
   const allRows = mod.buildRows(
     {advisories:[{name:'A1',severity:'High',packages:'p',fixed:'1.0',issues:['CVE-1'],date:'2026-01-01'}]},
     {vulnerabilities:[{cveID:'CVE-2',vendorProject:'X',product:'Y',vulnerabilityName:'Z',dateAdded:'2026-08-01'}]},
     {cves:[{id:'CVE-3',severity:'High',score:7.5,description:'D',published:'2026-08-10'}]},
     {advisories:[{title:'Alert 1',link:'https://l',date:'2026-08-12'}]},
     {findings:[{id:'GHSA-zzzz',ecosystem:'npm',package:'p',version:'1.0',summary:'s',severity:'HIGH',references:[],aliases:[]}]},
-    {advisories:[{id:'GHSA-yyyy',cve_id:'',severity:'high',summary:'s2',published:'2026-08-13',package:'q',ecosystem:'npm',packageCount:1,references:[]}]}
+    {advisories:[{id:'GHSA-yyyy',cve_id:'',severity:'high',summary:'s2',published:'2026-08-13',package:'q',ecosystem:'npm',packageCount:1,references:[]}]},
+    {findings:[{id:'CVE-2099-0001',image:'img:latest',target:'t',package:'p',installedVersion:'1.0',fixedVersion:'2.0',severity:'HIGH',title:'t',references:[]}]}
   );
   const rowTypes = allRows.map(function(r){return r.type}).sort().join(',');
 
@@ -395,6 +410,10 @@ model_test=$(node -e "
     ghsaWithCveCve: ghsaWithCveCve, ghsaWithCveDesc: ghsaWithCveDesc,
     ghsaNoCveCve: ghsaNoCveCve, ghsaNoCveDesc: ghsaNoCveDesc,
     mergedIds: mergedIds,
+    trivyWithCveType: trivyWithCveType, trivyWithCveSeverity: trivyWithCveSeverity,
+    trivyWithCveCve: trivyWithCveCve, trivyWithCveUnfixed: trivyWithCveUnfixed,
+    trivyNoFixCve: trivyNoFixCve, trivyNoFixUnfixed: trivyNoFixUnfixed,
+    trivyRowsFilteredCount: trivyRowsFilteredCount,
     searchMatchId: searchMatchId, searchMatchPkg: searchMatchPkg, searchMatchCase: searchMatchCase,
     searchNoMatch: searchNoMatch, searchEmptyQueryMatches: searchEmptyQueryMatches,
     searchAurPackage: searchAurPackage, searchFilteredIds: searchFilteredIds,
@@ -513,8 +532,22 @@ if [[ -n $model_test ]]; then
     jq -e '.foreignEmptyBoth == 0' <<<"$model_test"
   t "SentryModel.alertRow: type is alert" \
     jq -e '.alertType == "alert"' <<<"$model_test"
-  t "SentryModel.buildRows: 6 source types" \
-    jq -e '.rowTypes == "alert,arch,ghsa,kev,nvd,osv"' <<<"$model_test"
+  t "SentryModel.buildRows: 7 source types" \
+    jq -e '.rowTypes == "alert,arch,ghsa,kev,nvd,osv,trivy"' <<<"$model_test"
+  t "SentryModel.trivyRow: type is trivy" \
+    jq -e '.trivyWithCveType == "trivy"' <<<"$model_test"
+  t "SentryModel.trivyRow: severity uppercased" \
+    jq -e '.trivyWithCveSeverity == "HIGH"' <<<"$model_test"
+  t "SentryModel.trivyRow: firstCve picks up a real CVE id" \
+    jq -e '.trivyWithCveCve == "CVE-2099-0099"' <<<"$model_test"
+  t "SentryModel.trivyRow: unfixed is false when a fixedVersion is present" \
+    jq -e '.trivyWithCveUnfixed == false' <<<"$model_test"
+  t "SentryModel.trivyRow: a non-CVE id (e.g. GHSA) is not treated as a CVE" \
+    jq -e '.trivyNoFixCve == ""' <<<"$model_test"
+  t "SentryModel.trivyRow: unfixed is true when fixedVersion is empty" \
+    jq -e '.trivyNoFixUnfixed == true' <<<"$model_test"
+  t "SentryModel.trivyRows: filters to only trivy-type rows" \
+    jq -e '.trivyRowsFilteredCount == 1' <<<"$model_test"
   t "SentryModel.osvRow: type is osv" \
     jq -e '.osvType == "osv"' <<<"$model_test"
   t "SentryModel.osvRow: firstCve picks up a CVE alias when present" \
@@ -763,6 +796,69 @@ t "needrestart-fetch: unrecognized KSTA code maps to kernelStatus unknown" \
 export XDG_RUNTIME_DIR="$old_runtime"
 
 echo
+echo "== trivy-fetch =="
+
+env8=$(new_env)
+mkdir -p "$env8/bin" "$env8/cache/omarchy-cyber-sentry"
+export XDG_RUNTIME_DIR="$env8/cache"
+
+# Absent: the real, unmocked path — SENTRY_TEST_TRIVY unset, and this test
+# machine genuinely has no trivy installed, so this exercises the actual
+# candidate-path lookup finding nothing, not just a forced case.
+trivy_absent_out=$(./trivy-fetch --force 2>&1)
+trivy_absent_json=$(jq -c . <<<"$trivy_absent_out" 2>/dev/null || echo "{}")
+t "trivy-fetch: ok:true and available:false when trivy isn't installed" \
+  jq -e '.ok == true and .available == false and .scanned == 0 and .count == 0' <<<"$trivy_absent_json"
+
+cat >"$env8/bin/fake-trivy-no-runtime" <<'EOF'
+#!/bin/bash
+echo "should not be invoked" >&2
+exit 1
+EOF
+chmod +x "$env8/bin/fake-trivy-no-runtime"
+trivy_noruntime_out=$(SENTRY_TEST_TRIVY="$env8/bin/fake-trivy-no-runtime" SENTRY_TEST_DOCKER=/nonexistent SENTRY_TEST_PODMAN=/nonexistent ./trivy-fetch --force 2>&1)
+trivy_noruntime_json=$(jq -c . <<<"$trivy_noruntime_out" 2>/dev/null || echo "{}")
+t "trivy-fetch: trivy present but no container runtime is available:true, scanned:0" \
+  jq -e '.ok == true and .available == true and .scanned == 0 and .count == 0' <<<"$trivy_noruntime_json"
+
+cat >"$env8/bin/fake-docker" <<'EOF'
+#!/bin/bash
+if [[ $1 == images ]]; then
+  echo "myapp:latest"
+  echo "<none>:<none>"
+  echo "postgres:16"
+fi
+EOF
+chmod +x "$env8/bin/fake-docker"
+
+cat >"$env8/bin/fake-trivy" <<'EOF'
+#!/bin/bash
+image=""
+for a in "$@"; do image="$a"; done
+if [[ $image == myapp:latest ]]; then
+  cat <<'JSON'
+{"Results":[{"Target":"myapp:latest (debian 12.5)","Vulnerabilities":[{"VulnerabilityID":"CVE-2024-9999","PkgName":"libfoo","InstalledVersion":"1.2.3","FixedVersion":"1.2.4","Severity":"CRITICAL","Title":"libfoo heap overflow","References":["https://example.invalid/cve-2024-9999"]}]}]}
+JSON
+elif [[ $image == postgres:16 ]]; then
+  cat <<'JSON'
+{"Results":[{"Target":"postgres:16 (debian 12.5)","Vulnerabilities":[]}]}
+JSON
+fi
+EOF
+chmod +x "$env8/bin/fake-trivy"
+
+trivy_scan_out=$(SENTRY_TEST_TRIVY="$env8/bin/fake-trivy" SENTRY_TEST_DOCKER="$env8/bin/fake-docker" ./trivy-fetch --force 2>&1)
+trivy_scan_json=$(jq -c . <<<"$trivy_scan_out" 2>/dev/null || echo "{}")
+t "trivy-fetch: scans enumerated images, skipping <none> tags" \
+  jq -e '.ok == true and .available == true and .scanned == 2' <<<"$trivy_scan_json"
+t "trivy-fetch: finding carries id, image, package, versions, severity" \
+  jq -e '.findings[0] | (.id == "CVE-2024-9999") and (.image == "myapp:latest") and (.package == "libfoo") and (.installedVersion == "1.2.3") and (.fixedVersion == "1.2.4") and (.severity == "CRITICAL")' <<<"$trivy_scan_json"
+t "trivy-fetch: an image with no vulnerabilities contributes nothing" \
+  jq -e '[.findings[] | select(.image == "postgres:16")] | length == 0' <<<"$trivy_scan_json"
+
+export XDG_RUNTIME_DIR="$old_runtime"
+
+echo
 echo "== alerts-fetch fixture =="
 
 env3=$(new_env)
@@ -810,9 +906,9 @@ echo
 echo "== manifest.json =="
 
 t "manifest.json is valid JSON" \
-  jq -e '.schemaVersion == 1 and .version == "2.5.0"' "$(dirname "$0")/../manifest.json"
+  jq -e '.schemaVersion == 1 and .version == "2.6.0"' "$(dirname "$0")/../manifest.json"
 t "manifest.json has all new settings" \
-  jq -e '(.barWidget.defaults.nvdEnabled != null) and (.barWidget.defaults.alertsEnabled != null) and (.barWidget.defaults.epssEnabled != null) and (.barWidget.defaults.exploitdbEnabled != null) and (.barWidget.defaults.showKevBadge != null) and (.barWidget.defaults.kevRecentDays != null) and (.barWidget.defaults.kevAffectsMeOnly != null) and (.barWidget.defaults.osvEnabled != null) and (.barWidget.defaults.ghsaEnabled != null) and (.barWidget.defaults.needrestartEnabled != null)' "$(dirname "$0")/../manifest.json"
+  jq -e '(.barWidget.defaults.nvdEnabled != null) and (.barWidget.defaults.alertsEnabled != null) and (.barWidget.defaults.epssEnabled != null) and (.barWidget.defaults.exploitdbEnabled != null) and (.barWidget.defaults.showKevBadge != null) and (.barWidget.defaults.kevRecentDays != null) and (.barWidget.defaults.kevAffectsMeOnly != null) and (.barWidget.defaults.osvEnabled != null) and (.barWidget.defaults.ghsaEnabled != null) and (.barWidget.defaults.needrestartEnabled != null) and (.barWidget.defaults.trivyEnabled != null)' "$(dirname "$0")/../manifest.json"
 t "manifest.json has the trend/watchlist/digest/dnd settings" \
   jq -e '(.barWidget.defaults.showTrend != null) and (.barWidget.defaults.digestEnabled != null) and (.barWidget.defaults.digestIntervalDays != null) and (.barWidget.defaults.dndEnabled != null) and (.barWidget.defaults.dndStart != null) and (.barWidget.defaults.dndEnd != null)' "$(dirname "$0")/../manifest.json"
 t "manifest.json schema keys match defaults keys exactly" \

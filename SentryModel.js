@@ -237,6 +237,29 @@ function osvRow(o) {
   }
 }
 
+// Trivy finding for a local container image. Field-shape-compatible with
+// osvRow() on purpose (ecosystem/packages/version line up the same way)
+// so it reuses OsvRowDelegate directly — image scanning and per-package
+// OSV queries are different mechanisms, but the "ecosystem-ish · package
+// version" row shape is the same, so no new delegate is needed.
+function trivyRow(t) {
+  return {
+    type: "trivy",
+    id: String(t.id || ""),
+    severity: String(t.severity || "").toUpperCase(),
+    packages: String(t.package || ""),
+    fixed: String(t.fixedVersion || ""),
+    unfixed: !t.fixedVersion,
+    cves: (t.id && /^CVE-/.test(String(t.id))) ? [String(t.id)] : [],
+    date: "",
+    reference: "",
+    ecosystem: String(t.image || ""),
+    version: String(t.installedVersion || ""),
+    description: String(t.title || ""),
+    references: t.references || []
+  }
+}
+
 function alertRow(a) {
   return {
     type: "alert",
@@ -255,7 +278,7 @@ function alertRow(a) {
 
 // --- Build combined rows ---------------------------------------------------
 
-function buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed, ghsaParsed) {
+function buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed, ghsaParsed, trivyParsed) {
   var rows = []
   var archList = archParsed && archParsed.advisories ? archParsed.advisories : []
   for (var i = 0; i < archList.length; i++) rows.push(archRow(archList[i]))
@@ -269,6 +292,8 @@ function buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed, gh
   for (var m = 0; m < osvList.length; m++) rows.push(osvRow(osvList[m]))
   var ghsaList = ghsaParsed && ghsaParsed.advisories ? ghsaParsed.advisories : []
   for (var n = 0; n < ghsaList.length; n++) rows.push(ghsaRow(ghsaList[n]))
+  var trivyList = trivyParsed && trivyParsed.findings ? trivyParsed.findings : []
+  for (var o = 0; o < trivyList.length; o++) rows.push(trivyRow(trivyList[o]))
   return rows
 }
 
@@ -366,6 +391,10 @@ function ghsaRows(rows) {
 
 function osvRows(rows) {
   return rows.filter(function(r) { return r.type === "osv" })
+}
+
+function trivyRows(rows) {
+  return rows.filter(function(r) { return r.type === "trivy" })
 }
 
 // --- Sorting ---------------------------------------------------------------

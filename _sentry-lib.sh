@@ -49,6 +49,7 @@ readonly SENTRY_BIN_XMLSTARLET=/usr/bin/xmlstarlet
 readonly SENTRY_BIN_XMLLINT=/usr/bin/xmllint
 readonly SENTRY_BIN_SLEEP=/usr/bin/sleep
 readonly SENTRY_BIN_TPUT=/usr/bin/tput
+readonly SENTRY_BIN_TIMEOUT=/usr/bin/timeout
 
 # Fixed, non-varying curl hardening: restrict to https for both the request
 # and any redirect target, so a compromised or hijacked feed can't downgrade

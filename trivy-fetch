@@ -1,0 +1,103 @@
+#!/bin/bash
+
+# Container image vulnerability scan via Trivy.
+#
+# Usage: trivy-fetch [--force]
+#
+# Enumerates local container images (Docker preferred, Podman fallback)
+# and scans each with `trivy image` for High/Critical vulnerabilities.
+# Both Trivy and the container runtime are independently optional —
+# gracefully reports "unavailable" at whichever level is missing rather
+# than erroring, same pattern as pip/npm/cargo/go in osv-fetch and
+# needrestart in needrestart-fetch.
+#
+# Image count and per-image scan time are both capped, since a Trivy scan
+# can be slow (especially on first run, downloading its vulnerability DB) —
+# bounds worst-case runtime for a bar widget's refresh cycle.
+#
+# Prints {"ok":true,"source":"trivy","checkedAt":...,"available":bool,"scanned":N,"count":N,"findings":[...]}
+# or {"ok":false,"error":"..."} — exiting 0 either way.
+
+set -uo pipefail
+
+readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
+readonly CACHE_FILE="$CACHE_DIR/trivy-findings.json"
+readonly TTL="${SENTRY_TRIVY_TTL:-3600}"
+readonly MAX_IMAGES="${SENTRY_TRIVY_MAX_IMAGES:-5}"
+readonly SCAN_TIMEOUT="${SENTRY_TRIVY_SCAN_TIMEOUT:-60s}"
+readonly MAX_BYTES=8388608
+
+source "${BASH_SOURCE[0]%/*}/_sentry-lib.sh"
+
+die() {
+  "$SENTRY_BIN_JQ" -cn --arg m "$1" '{ok:false, source:"trivy", error:$m}'
+  exit 0
+}
+
+sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use"
+
+needs_refresh() {
+  [[ -s $CACHE_FILE ]] || return 0
+  local now age
+  now=$("$SENTRY_BIN_DATE" +%s)
+  age=$((now - $("$SENTRY_BIN_STAT" -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
+  (( age >= TTL ))
+}
+
+if [[ ${1:-} == --force ]] || needs_refresh; then
+  tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
+  checked="$("$SENTRY_BIN_DATE" -u +%FT%TZ)"
+
+  if ! trivy_bin=$(sentry_find_optional_bin "${SENTRY_TEST_TRIVY:-}" /usr/bin/trivy /usr/local/bin/trivy); then
+    "$SENTRY_BIN_JQ" -cn --arg checked "$checked" \
+      '{ok:true, source:"trivy", checkedAt:$checked, available:false, scanned:0, count:0, findings:[]}' > "$tmp" 2>/dev/null
+  elif ! runtime_bin=$(sentry_find_optional_bin "${SENTRY_TEST_DOCKER:-}" /usr/bin/docker) &&
+       ! runtime_bin=$(sentry_find_optional_bin "${SENTRY_TEST_PODMAN:-}" /usr/bin/podman); then
+    # Trivy is present but no container runtime is — still "available" in
+    # the sense the scanner itself works, just nothing local to scan.
+    "$SENTRY_BIN_JQ" -cn --arg checked "$checked" \
+      '{ok:true, source:"trivy", checkedAt:$checked, available:true, scanned:0, count:0, findings:[]}' > "$tmp" 2>/dev/null
+  else
+    images=()
+    while IFS= read -r img; do
+      [[ -n $img && $img != *'<none>'* ]] && images+=("$img")
+    done < <("$runtime_bin" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | "$SENTRY_BIN_HEAD" -n "$MAX_IMAGES")
+
+    findings_ndjson=""
+    for img in "${images[@]}"; do
+      raw=$("$SENTRY_BIN_TIMEOUT" "$SCAN_TIMEOUT" "$trivy_bin" image --format json --severity HIGH,CRITICAL \
+        --scanners vuln -q "$img" 2>/dev/null)
+      [[ -n $raw ]] || continue
+
+      batch=$(printf '%s' "$raw" | "$SENTRY_BIN_JQ" -c --arg image "$img" '
+        [(.Results // [])[]? | .Target as $target | (.Vulnerabilities // [])[] | {
+          id: .VulnerabilityID,
+          image: $image,
+          target: $target,
+          package: .PkgName,
+          installedVersion: (.InstalledVersion // ""),
+          fixedVersion: (.FixedVersion // ""),
+          severity: .Severity,
+          title: (.Title // ""),
+          references: ((.References // []) | .[0:5])
+        }]' 2>/dev/null)
+      [[ -n $batch ]] && findings_ndjson+="$batch"$'\n'
+    done
+
+    all=$(printf '%s' "$findings_ndjson" | "$SENTRY_BIN_JQ" -cs 'add // []' 2>/dev/null)
+    [[ -n $all ]] || all="[]"
+
+    printf '%s' "$all" | "$SENTRY_BIN_JQ" -c --arg checked "$checked" --argjson scanned "${#images[@]}" \
+      '{ok:true, source:"trivy", checkedAt:$checked, available:true, scanned:$scanned, count:length, findings:.}' > "$tmp" 2>/dev/null
+  fi
+
+  [[ -s $tmp ]] && "$SENTRY_BIN_MV" -f "$tmp" "$CACHE_FILE"
+fi
+
+[[ -s $CACHE_FILE ]] || die "trivy scan produced no cache"
+sentry_safe_regular_file "$CACHE_FILE" || die "cache file is not safe to read"
+
+"$SENTRY_BIN_JQ" -e 'type=="object" and (.findings | type=="array")' "$CACHE_FILE" >/dev/null 2>&1 ||
+  die "trivy cache contains unparseable data"
+
+"$SENTRY_BIN_CAT" "$CACHE_FILE"

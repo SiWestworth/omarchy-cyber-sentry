@@ -105,6 +105,18 @@ a real overreach; checking the kernel doesn't need elevated privileges and
 is still the single most common "you should probably reboot" signal.
 Skipped gracefully (pill reads `n/a`) if `needrestart` isn't installed.
 
+## Containers tab (Trivy image scan)
+
+If [Trivy](https://github.com/aquasecurity/trivy) is installed alongside
+Docker or Podman, a **Containers** tab scans your local container images for
+High/Critical vulnerabilities — the same kind of coverage the Dev tab gives
+your pip/npm/cargo/go packages, but for what's actually sitting in your local
+image cache. Up to 5 images are scanned per refresh (newest/most-recently-tagged
+first), each capped at 60 seconds, so a slow first-time Trivy DB download
+can't stall the bar's refresh cycle. Both Trivy and the container runtime are
+independently optional — the tab reports "Trivy isn't installed" or "no
+images to scan" rather than erroring when either is missing.
+
 ## Exposure trend
 
 A small sparkline in the panel header tracks the affected-package badge count
@@ -225,6 +237,8 @@ Open the Omarchy settings UI and configure these under the **Cyber Sentry** sect
 | Check ExploitDB | on | Toggle the public-exploit lookup |
 | Scan dev packages (OSV.dev) | on | Toggle the pip/npm/cargo/go global-package scan |
 | Merge GHSA into Recent | on | Toggle GitHub Security Advisories in the Recent tab |
+| Check kernel reboot (needrestart) | on | Toggle the kernel-update-needs-reboot check |
+| Scan container images (Trivy) | on | Toggle the Containers tab image scan |
 | Notify on affected | on | Desktop notification when a new advisory affects an installed package |
 | Notify on KEV | on | Desktop notification when a new KEV entry is added |
 | Notify on NVD | off | Desktop notification on new High/Critical NVD CVEs |
@@ -254,6 +268,7 @@ Open the Omarchy settings UI and configure these under the **Cyber Sentry** sect
 | `4` | Switch to Alerts tab |
 | `5` | Switch to Foreign (AUR/Flatpak) tab |
 | `6` | Switch to Dev tab |
+| `7` | Switch to Containers tab |
 | `q` | Close CVE detail overlay (if open) |
 | `Esc` | Close the panel |
 
@@ -271,6 +286,7 @@ Notification history is persisted at `~/.local/state/omarchy/settings/cyber-sent
   independently optional; the Dev tab just scans whichever are present
 - Optional, for the Foreign tab: `flatpak` — skipped gracefully if absent
 - Optional, for the kernel reboot check: `needrestart` — skipped gracefully if absent
+- Optional, for the Containers tab: [`trivy`](https://github.com/aquasecurity/trivy) plus Docker or Podman — skipped gracefully if either is absent
 
 ## Testing
 

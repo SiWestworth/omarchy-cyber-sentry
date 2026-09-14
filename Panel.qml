@@ -43,6 +43,7 @@ Panel {
   readonly property string osvPath: Qt.resolvedUrl("osv-fetch").toString().replace(/^file:\/\//, "")
   readonly property string ghsaPath: Qt.resolvedUrl("ghsa-fetch").toString().replace(/^file:\/\//, "")
   readonly property string needrestartPath: Qt.resolvedUrl("needrestart-fetch").toString().replace(/^file:\/\//, "")
+  readonly property string trivyPath: Qt.resolvedUrl("trivy-fetch").toString().replace(/^file:\/\//, "")
 
   readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy/settings"
   readonly property string configPath: stateDir + "/cyber-sentry.json"
@@ -70,6 +71,7 @@ Panel {
   readonly property bool osvEnabled: setting("osvEnabled", true)
   readonly property bool ghsaEnabled: setting("ghsaEnabled", true)
   readonly property bool needrestartEnabled: setting("needrestartEnabled", true)
+  readonly property bool trivyEnabled: setting("trivyEnabled", true)
   readonly property bool notifyOnAffected: setting("notifyOnAffected", true)
   readonly property bool notifyOnKev: setting("notifyOnKev", true)
   readonly property bool notifyOnNvd: setting("notifyOnNvd", false)
@@ -97,6 +99,7 @@ Panel {
   property var osvParsed: null
   property var ghsaParsed: null
   property var needrestartParsed: null
+  property var trivyParsed: null
   property var installedMap: ({})
   property var aurPackages: []
   property var flatpakPackages: []
@@ -114,13 +117,14 @@ Panel {
   property bool osvFetching: false
   property bool ghsaFetching: false
   property bool needrestartFetching: false
+  property bool trivyFetching: false
   property var notified: ({})
   property real lastDigestAt: 0
   property bool stateLoaded: false
   property var history: []
   property bool historyLoaded: false
   property bool bootstrapDone: false
-  property int activeTab: 0  // 0=System, 1=Exploited, 2=Recent, 3=Alerts, 4=Foreign, 5=Dev
+  property int activeTab: 0  // 0=System, 1=Exploited, 2=Recent, 3=Alerts, 4=Foreign, 5=Dev, 6=Containers
   property string cveDetailTitle: ""
   property string cveDetailText: ""
   property bool cveDetailOpen: false
@@ -130,7 +134,7 @@ Panel {
   property var userConfig: ({})
   property bool configLoaded: false
 
-  readonly property bool refreshing: archFetching || kevFetching || nvdFetching || alertsFetching || epssFetching || exploitdbFetching || osvFetching || ghsaFetching || needrestartFetching
+  readonly property bool refreshing: archFetching || kevFetching || nvdFetching || alertsFetching || epssFetching || exploitdbFetching || osvFetching || ghsaFetching || needrestartFetching || trivyFetching
   readonly property bool paused: conf("paused", false)
 
   // --- config / settings lookups -------------------------------------------
@@ -179,7 +183,7 @@ Panel {
 
   // --- derived data ----------------------------------------------------------
   property var enrichedRows: {
-    var r = SentryModel.buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed, ghsaParsed)
+    var r = SentryModel.buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed, ghsaParsed, trivyParsed)
     if (epssParsed) r = SentryModel.epssMerge(r, epssParsed)
     if (exploitdbParsed) r = SentryModel.exploitMerge(r, exploitdbParsed)
     if (Object.keys(installedMap).length > 0) r = SentryModel.installMerge(r, installedMap)
@@ -247,6 +251,11 @@ Panel {
   readonly property var osvRows: SentryModel.filterBySearch(SentryModel.sortBySeverity(
     SentryModel.filterOutDismissed(
       SentryModel.filterByThresholdOrWatched(SentryModel.osvRows(enrichedRows), severityThreshold, watchlist),
+      dismissed)
+  ), searchQuery).slice(0, maxItems)
+  readonly property var trivyRows: SentryModel.filterBySearch(SentryModel.sortBySeverity(
+    SentryModel.filterOutDismissed(
+      SentryModel.filterByThresholdOrWatched(SentryModel.trivyRows(enrichedRows), severityThreshold, watchlist),
       dismissed)
   ), searchQuery).slice(0, maxItems)
   readonly property var foreignFiltered: SentryModel.filterBySearch(foreignPackages, searchQuery)
@@ -347,13 +356,21 @@ Panel {
     return needrestartParsed.available ? "ok" : "n/a"
   }
 
+  readonly property string trivyStatusLabel: {
+    if (!trivyEnabled) return "off"
+    if (trivyFetching) return "syncing"
+    if (trivyParsed === null) return "idle"
+    if (!SentryModel.sourceOk(trivyParsed)) return "error"
+    return trivyParsed.available ? "ok" : "n/a"
+  }
+
   readonly property bool kernelNeedsReboot: needrestartEnabled
     && needrestartParsed !== null
     && SentryModel.sourceOk(needrestartParsed)
     && needrestartParsed.kernelStatus === "outdated"
 
   readonly property string lastUpdatedText: {
-    var sources = [archParsed, kevParsed, nvdParsed, alertsParsed, epssParsed, exploitdbParsed, osvParsed, ghsaParsed, needrestartParsed]
+    var sources = [archParsed, kevParsed, nvdParsed, alertsParsed, epssParsed, exploitdbParsed, osvParsed, ghsaParsed, needrestartParsed, trivyParsed]
     var newest = ""
     for (var i = 0; i < sources.length; i++) {
       var t = SentryModel.checkedAt(sources[i])
@@ -419,6 +436,11 @@ Panel {
       needrestartFetching = true
       needrestartProcess.command = [needrestartPath]
       needrestartProcess.running = true
+    }
+    if (trivyEnabled && !trivyFetching) {
+      trivyFetching = true
+      trivyProcess.command = [trivyPath]
+      trivyProcess.running = true
     }
     // EPSS runs after other sources (needs CVE list from their caches)
     if (epssEnabled && !epssFetching) {
@@ -586,6 +608,20 @@ Panel {
     initialized = true
   }
 
+  function applyTrivy(exitCode, out, err) {
+    trivyFetching = false
+    var parsed = null
+    if (exitCode === 0) {
+      try { parsed = JSON.parse(String(out || "")) } catch (e) { parsed = null }
+    }
+    if (!parsed || parsed.ok !== true) {
+      var detail = String(err || "").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "")
+      parsed = { ok: false, source: "trivy", error: detail !== "" ? detail : "trivy-fetch exited " + exitCode }
+    }
+    trivyParsed = parsed
+    initialized = true
+  }
+
   // --- notifications --------------------------------------------------------
   function evaluateNotifications(type) {
     // Bootstrap suppression: on the very first successful fetch, mark all items
@@ -593,7 +629,7 @@ Panel {
     if (!bootstrapDone) {
       if (SentryModel.sourceOk(archParsed) && SentryModel.sourceOk(kevParsed)) {
         bootstrapDone = true
-        var allRows = SentryModel.buildRows(archParsed, kevParsed, null, null, null, null)
+        var allRows = SentryModel.buildRows(archParsed, kevParsed, null, null, null, null, null)
         SentryModel.markAllSeen(allRows, notified, Date.now())
         saveNotifyState()
         return
@@ -927,6 +963,15 @@ Panel {
   }
 
   Process {
+    id: trivyProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: trivyStdout; waitForEnd: true }
+    stderr: StdioCollector { id: trivyStderr; waitForEnd: true }
+    onExited: function(exitCode) { root.applyTrivy(exitCode, trivyStdout.text, trivyStderr.text) }
+  }
+
+  Process {
     id: cveProcess
     running: false
     command: []
@@ -1059,7 +1104,7 @@ Panel {
       blocked: searchField.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) {
-        if (direction > 0) root.activeTab = Math.min(5, root.activeTab + 1)
+        if (direction > 0) root.activeTab = Math.min(6, root.activeTab + 1)
         else root.activeTab = Math.max(0, root.activeTab - 1)
       }
       onTextKey: function(text) {
@@ -1072,6 +1117,7 @@ Panel {
         else if (key === "4") root.activeTab = 3
         else if (key === "5") root.activeTab = 4
         else if (key === "6") root.activeTab = 5
+        else if (key === "7") root.activeTab = 6
         else if (key === "q" && root.cveDetailOpen) root.cveDetailOpen = false
       }
 
@@ -1170,6 +1216,7 @@ Panel {
             StatusPill { pillLabel: "OSV"; pillState: root.osvStatusLabel }
             StatusPill { pillLabel: "GHSA"; pillState: root.ghsaStatusLabel }
             StatusPill { pillLabel: "KERNEL"; pillState: root.needrestartStatusLabel }
+            StatusPill { pillLabel: "TRIVY"; pillState: root.trivyStatusLabel }
           }
 
           Text {
@@ -1218,41 +1265,58 @@ Panel {
             }
           }
 
-          // Tab row
-          Row {
-            id: tabRow
+          // Tab row — seven tabs no longer fit the panel width, so this
+          // scrolls horizontally rather than wrapping or clipping (a plain
+          // Row silently clipped the last two tabs off-screen).
+          Flickable {
+            id: tabRowFlick
             width: parent.width
-            spacing: Style.space(4)
+            height: tabRow.implicitHeight
+            contentWidth: tabRow.implicitWidth
+            contentHeight: height
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.HorizontalFlick
 
-            TabButton {
-              tabLabel: "System (" + root.systemRows.length + ")"
-              tabActive: root.activeTab === 0
-              onClicked: root.activeTab = 0
-            }
-            TabButton {
-              tabLabel: "Exploited (" + root.kevCount + ")"
-              tabActive: root.activeTab === 1
-              onClicked: root.activeTab = 1
-            }
-            TabButton {
-              tabLabel: "Recent (" + root.nvdRows.length + ")"
-              tabActive: root.activeTab === 2
-              onClicked: root.activeTab = 2
-            }
-            TabButton {
-              tabLabel: "Alerts (" + root.alertRows.length + ")"
-              tabActive: root.activeTab === 3
-              onClicked: root.activeTab = 3
-            }
-            TabButton {
-              tabLabel: "Foreign (" + root.foreignFiltered.length + ")"
-              tabActive: root.activeTab === 4
-              onClicked: root.activeTab = 4
-            }
-            TabButton {
-              tabLabel: "Dev (" + root.osvRows.length + ")"
-              tabActive: root.activeTab === 5
-              onClicked: root.activeTab = 5
+            Row {
+              id: tabRow
+              spacing: Style.space(4)
+
+              TabButton {
+                tabLabel: "System (" + root.systemRows.length + ")"
+                tabActive: root.activeTab === 0
+                onClicked: root.activeTab = 0
+              }
+              TabButton {
+                tabLabel: "Exploited (" + root.kevCount + ")"
+                tabActive: root.activeTab === 1
+                onClicked: root.activeTab = 1
+              }
+              TabButton {
+                tabLabel: "Recent (" + root.nvdRows.length + ")"
+                tabActive: root.activeTab === 2
+                onClicked: root.activeTab = 2
+              }
+              TabButton {
+                tabLabel: "Alerts (" + root.alertRows.length + ")"
+                tabActive: root.activeTab === 3
+                onClicked: root.activeTab = 3
+              }
+              TabButton {
+                tabLabel: "Foreign (" + root.foreignFiltered.length + ")"
+                tabActive: root.activeTab === 4
+                onClicked: root.activeTab = 4
+              }
+              TabButton {
+                tabLabel: "Dev (" + root.osvRows.length + ")"
+                tabActive: root.activeTab === 5
+                onClicked: root.activeTab = 5
+              }
+              TabButton {
+                tabLabel: "Containers (" + root.trivyRows.length + ")"
+                tabActive: root.activeTab === 6
+                onClicked: root.activeTab = 6
+              }
             }
           }
 
@@ -1640,6 +1704,93 @@ Panel {
               text: !root.initialized
                 ? "Loading…"
                 : root.noMatchText("No vulnerabilities found in your global pip/npm/cargo/go packages")
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+            }
+          }
+
+          // --- Containers tab (Trivy image scan) ------------------------------
+          Rectangle {
+            id: trivyView
+            width: parent.width
+            visible: root.activeTab === 6
+            height: root.activeTab === 6 ? Style.space(340) : 0
+            radius: Style.space(6)
+            color: "transparent"
+
+            ListView {
+              id: trivyList
+              anchors.fill: parent
+              clip: true
+              model: root.trivyRows
+              spacing: Style.space(3)
+              cacheBuffer: Style.space(60)
+
+              delegate: OsvRowDelegate {
+                width: trivyList.width
+                onSelected: root.openCveDetail(modelData)
+              }
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: !root.trivyEnabled
+              text: "Container scanning is disabled in settings"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: root.trivyEnabled && root.trivyParsed !== null && !SentryModel.sourceOk(root.trivyParsed)
+              width: parent.width - Style.space(24)
+              horizontalAlignment: Text.AlignHCenter
+              text: "Trivy scan unavailable: " + SentryModel.sourceError(root.trivyParsed)
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: root.trivyEnabled && root.trivyParsed !== null && SentryModel.sourceOk(root.trivyParsed)
+                && root.trivyParsed.available === false && trivyList.count === 0
+              width: parent.width - Style.space(24)
+              horizontalAlignment: Text.AlignHCenter
+              text: root.noMatchText("Trivy isn't installed — install it to scan local Docker/Podman images")
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: root.trivyEnabled && root.trivyParsed !== null && SentryModel.sourceOk(root.trivyParsed)
+                && root.trivyParsed.available === true && root.trivyParsed.scanned === 0 && trivyList.count === 0
+              width: parent.width - Style.space(24)
+              horizontalAlignment: Text.AlignHCenter
+              text: root.noMatchText("No local container images found to scan")
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: root.trivyEnabled && root.trivyParsed !== null && SentryModel.sourceOk(root.trivyParsed)
+                && root.trivyParsed.available === true && root.trivyParsed.scanned > 0
+                && trivyList.count === 0 && root.initialized
+              width: parent.width - Style.space(24)
+              horizontalAlignment: Text.AlignHCenter
+              text: !root.initialized
+                ? "Loading…"
+                : root.noMatchText("No High/Critical vulnerabilities found in " + root.trivyParsed.scanned + " scanned image" + (root.trivyParsed.scanned === 1 ? "" : "s"))
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
