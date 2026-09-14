@@ -678,7 +678,10 @@ Panel {
     // a backlog flood, and the badge/panel keep reflecting live data.
     if (dndEnabled && SentryModel.isWithinDnd(dndStart, dndEnd, new Date())) return
     notificationProcess.running = false
-    notificationProcess.command = ["omarchy-notification-send", "-a", "--app-name", "sentry",
+    // Absolute path, not ambient-PATH — this fires unattended on every
+    // alert, unlike the click-gated actions elsewhere, so it gets the same
+    // hardening the fetch scripts already apply to curl/jq/pacman.
+    notificationProcess.command = ["/usr/bin/omarchy-notification-send", "-a", "--app-name", "sentry",
       "-u", isUrgent ? "critical" : "normal", "-g", shieldGlyph, headline, body]
     notificationProcess.running = true
   }
@@ -821,11 +824,12 @@ Panel {
     aurProcess.command = ["/usr/bin/pacman", "-Qm"]
     aurProcess.running = true
     // Flatpak is optional and often absent — wrapped in a shell existence
-    // check so this always exits cleanly (empty output, not a Process
-    // failure) when it's not installed, rather than assuming
-    // /usr/bin/flatpak exists the way the pacman calls above safely can.
+    // check on the fixed absolute path (never ambient-PATH "flatpak") so
+    // this always exits cleanly (empty output, not a Process failure) when
+    // it's not installed, rather than assuming /usr/bin/flatpak exists the
+    // way the pacman calls above safely can.
     flatpakProcess.command = ["/bin/sh", "-c",
-      "command -v flatpak >/dev/null 2>&1 && flatpak list --app --columns=application,version || true"]
+      "test -x /usr/bin/flatpak && /usr/bin/flatpak list --app --columns=application,version || true"]
     flatpakProcess.running = true
     refreshTimer.start()
     refresh()
@@ -2706,7 +2710,12 @@ Panel {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onClicked: {
-        Qt.openUrlExternally(modelData.link)
+        // modelData.link comes from the NCSC-NL feed over the network — only
+        // ever hand a plain http(s) URL to the OS's external handler, never
+        // whatever scheme a compromised/hijacked feed might substitute.
+        if (/^https?:\/\//.test(String(modelData.link || ""))) {
+          Qt.openUrlExternally(modelData.link)
+        }
       }
     }
 
