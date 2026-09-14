@@ -1,14 +1,122 @@
 # Cyber Sentry Security Audit
 
+Two audit rounds so far: an automated security-testing skill pack against
+the original codebase, and a manual line-by-line pass after this session's
+feature additions (OSV, GHSA, needrestart, Trivy, and the QML process/URL
+handling that went with them) roughly tripled the attack surface. Findings
+from both rounds are kept below in the order they were found.
+
+## Round 2 — manual audit
+
+**Target:** omarchy-cyber-sentry
+**Baseline:** `ceffa9d`
+**Date:** 2026-09-14
+
+A manual read of all 12 bash scripts (`_sentry-lib.sh` + 11 fetch scripts),
+Panel.qml's subprocess and URL-handling code, and SentryModel.js — prompted
+by the amount of new subprocess-spawning and network-parsing code this
+session added, none of which had a dedicated second pass looking
+specifically for injection or trust-boundary issues. No tooling/skill pack
+run this round — direct code reading plus live verification of every fix.
+
+| | |
+|---|---|
+| Confirmed & fixed | 3 |
+| Found & fixed (functional, not security) | 1 |
+| Checked, clean | 2 |
+
+### 🟡 Unvalidated URL scheme opened on a single click — Confirmed · fixed
+
+**Where:** `Panel.qml`, Alerts tab row `onClicked`
+
+Every Alerts-tab row called `Qt.openUrlExternally(modelData.link)` with no
+check that `link` was actually `http(s)://`. `link` comes straight from the
+NCSC-NL RSS feed's `<link>` element (network-sourced, `alerts-fetch`). A
+compromised or hijacked feed could serve a custom URI scheme — a
+registered app handler, `file://`, etc. — and one click would hand it to
+the OS's default handler unchecked.
+
+**Fix:** only call `openUrlExternally` when `modelData.link` matches
+`^https?://`. Committed and pushed to `origin/main` (`3ca6034`).
+
+### 🟡 Notification sender resolved via ambient `$PATH` — Confirmed · fixed
+
+**Where:** `Panel.qml`, `sendNotification()`
+
+`notificationProcess.command` invoked `"omarchy-notification-send"` with no
+absolute path — the one place in the codebase that didn't follow the
+hardened-path rule `_sentry-lib.sh` documents and every fetch script
+applies to curl/jq/pacman (a poisoned `$PATH` entry runs with the user's
+session privileges). Worse than the click-gated finding above because it
+fires unattended on every alert.
+
+**Fix:** hardcoded to the confirmed real path, `/usr/bin/omarchy-notification-send`.
+Committed and pushed to `origin/main` (`3ca6034`).
+
+### 🟢 Same ambient-`$PATH` gap for the optional `flatpak` check — Confirmed · fixed
+
+**Where:** `Panel.qml`, `flatpakProcess.command`
+
+`/bin/sh -c "command -v flatpak ... && flatpak list ... || true"` resolved
+both the existence check and the actual invocation via ambient `$PATH`,
+inconsistent with the `sentry_find_optional_bin()` fixed-candidate-path
+pattern already used for pip/npm/cargo/go in `osv-fetch`. Lower severity
+than the notification finding — runs once at startup, output is only
+displayed — but same root cause.
+
+**Fix:** both the `test -x` check and the invocation now use the fixed
+`/usr/bin/flatpak` path. Verified live: with flatpak genuinely absent on
+the test machine, the Foreign tab still correctly reports its AUR-only
+count with no Process errors in the Quickshell log. Committed and pushed
+to `origin/main` (`3ca6034`).
+
+### ⚙️ Notifications silently failing to send — Found & fixed (functional, not security)
+
+**Where:** `Panel.qml`, `sendNotification()`
+
+Found while manually verifying the fix above: this build of
+`omarchy-notification-send` has no `-a` flag (only `--app-name`), and the
+call passed both. Confirmed directly — running the real command with `-a`
+present eats the following arguments and exits 1; without it, exit 0. This
+means every desktop notification (new-advisory alerts, KEV alerts, the
+weekly digest) has been silently failing to send since the plugin's first
+commit. Not a vulnerability, but found during this pass and fixed in the
+same place. Committed and pushed to `origin/main` (`ed33bf4`).
+
+### 🟢 Clipboard/fix-command shell construction — Checked · clean
+
+**Check:** `copyToClipboard()` and the CVE-detail "Run in terminal" action
+
+Both build a shell command string from data and looked worth tracing
+closely. `copyToClipboard` uses the framework's `Util.shellQuote()` (correct
+single-quote escaping — verified by reading its implementation, not
+assumed) before interpolating arbitrary CVE-description text pulled from
+NVD/GHSA/OSV. The "Run in terminal" fix action only ever operates on the
+hardcoded literal `"sudo pacman -Syu"` (`SentryModel.archFixState()`) —
+never on anything feed-derived — so there's nothing for the quoting to get
+wrong in the first place.
+
+### 🟢 Argument injection via enumerated container image names — Checked · clean (defense-in-depth note)
+
+**Check:** `trivy-fetch`'s per-image scan
+
+Locally-enumerated Docker/Podman image names are passed as a single quoted
+argv element to `trivy image ... "$img"` — not shell-interpolated, so not
+classic injection. Docker/Podman's own tag-naming rules block a leading
+`-`, so a flag-injection attempt isn't practically constructible through
+normal `docker pull`/`docker build` usage. No fix applied; noted as a
+zero-cost hardening opportunity (a `--` separator before the image arg, if
+Trivy supports one) rather than a real finding.
+
+## Round 1 — automated skill pack
+
 **Target:** omarchy-cyber-sentry
 **Baseline:** `5e8d567`
 **Date:** 2026-09-11
 
-Results of running a security-testing skill pack against cyber.sentry
-itself — an Omarchy threat-intel bar widget that fetches and parses
-external CVE/KEV/advisory feeds. 10 of the skills checked were relevant to
-its actual attack surface; the rest were excluded with a stated reason. Of
-the 10 run:
+A security-testing skill pack run against cyber.sentry itself. 10 of the
+skills checked were relevant to its actual attack surface; the rest were
+excluded with a stated reason (see "Not applicable" below). Of the 10 run:
 
 | | |
 |---|---|
@@ -16,8 +124,6 @@ the 10 run:
 | Documented, unproven | 1 |
 | Checked, clean | 9 |
 | Blocked — no tooling | 0 |
-
-## Findings
 
 ### 🔴 Local file disclosure via XXE in the RSS parser — Confirmed · fixed
 
@@ -152,7 +258,7 @@ important-only mode. 0 findings — verified genuine (not a broken scan) via
 a clean database-quality check, a verified non-zero query suite, and
 successful invocation metadata against the right file.
 
-## Coverage — every skill checked
+### Coverage — every skill checked
 
 | Skill | Relevant | Result |
 |---|---|---|
@@ -167,7 +273,7 @@ successful invocation metadata against the right file.
 | Thick-client testing | Yes | Clean |
 | Linux privilege escalation | Yes | Clean |
 
-## Not applicable (checked, not run)
+### Not applicable (checked, not run)
 
 **No login / auth / uploads**
 Password/username/webshell/payload-focused checks
