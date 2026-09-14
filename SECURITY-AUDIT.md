@@ -16,14 +16,16 @@ A manual read of all 12 bash scripts (`_sentry-lib.sh` + 11 fetch scripts),
 Panel.qml's subprocess and URL-handling code, and SentryModel.js — prompted
 by the amount of new subprocess-spawning and network-parsing code this
 session added, none of which had a dedicated second pass looking
-specifically for injection or trust-boundary issues. No tooling/skill pack
-run this round — direct code reading plus live verification of every fix.
+specifically for injection or trust-boundary issues. Followed up with the
+same automated tooling Round 1 used (Semgrep, CodeQL), re-run against
+everything this session added, since a manual read and pattern-based
+static analysis have different blind spots.
 
 | | |
 |---|---|
 | Confirmed & fixed | 3 |
 | Found & fixed (functional, not security) | 1 |
-| Checked, clean | 2 |
+| Checked, clean | 4 |
 
 ### 🟡 Unvalidated URL scheme opened on a single click — Confirmed · fixed
 
@@ -107,6 +109,39 @@ classic injection. Docker/Podman's own tag-naming rules block a leading
 normal `docker pull`/`docker build` usage. No fix applied; noted as a
 zero-cost hardening opportunity (a `--` separator before the image arg, if
 Trivy supports one) rather than a real finding.
+
+### 🟢 Semgrep static analysis (re-run) — Checked · 1 false positive (same as Round 1)
+
+**Check:** Semgrep scan → full repo, important-only mode
+
+Same ruleset combination as Round 1 (`p/security-audit`, `p/secrets`,
+`p/javascript`, the Trail of Bits `semgrep-rules` third-party ruleset),
+re-run to cover everything this session added — 6 new fetch scripts, the
+expanded `SentryModel.js` and `Panel.qml`. All 4 scans succeeded (0
+failed, 0 skipped). 1 finding, same rule and same file as Round 1:
+`curl-unencrypted-url` in `_sentry-lib.sh` lines 54-56 — re-read the exact
+lines and it's still the comment documenting the HTTPS-only hardening
+(`--proto '=https'`), not a real unencrypted curl call. No code change
+needed. Bash has no dedicated official Semgrep ruleset (community support
+only), so `p/secrets` and the Trail of Bits ruleset are the two that
+actually cover all 20 files; `p/security-audit`/`p/javascript` only match
+`.js`/`.json` by design (2 files) and are not a coverage gap introduced
+this round.
+
+### 🟢 CodeQL static analysis (re-run) — Checked · clean
+
+**Check:** CodeQL scan → `SentryModel.js`
+
+Same scope and technique as Round 1 (CodeQL has no bash or QML extractor;
+the `.pragma library` QML directive stripped from a sanitized copy before
+extraction). Database quality confirmed clean before analysis: 525
+baseline lines of code, 0 extractor errors. Ran the official
+`javascript-queries` pack, 126 queries, important-only mode — the same
+query count as Round 1, confirming deterministic suite generation. 0
+findings. `SentryModel.js` has grown substantially since Round 1 (now
+includes the `osv`/`ghsa`/`trivy` row builders, the composite risk score,
+and search/dismiss/watchlist filtering) — this re-run gives that new code
+the same coverage the original file had.
 
 ## Round 1 — automated skill pack
 
