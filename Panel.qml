@@ -182,12 +182,23 @@ Panel {
   }
 
   // --- derived data ----------------------------------------------------------
-  property var enrichedRows: {
+  // enrichedRows is deliberately NOT a live binding on archParsed/kevParsed/etc.
+  // It used to be, which meant it fully recomputed (buildRows + 3 merges,
+  // including the installMerge KEV/installed correlation) on every single one
+  // of the ~9 fetch sources' independent async completion — up to ~9x in the
+  // burst that unpausing (or startup, which fires the same burst) triggers.
+  // That repeated recompute, not any one source's cost alone, was the
+  // remaining CPU spike/lag on toggle. Instead it's recomputed once via
+  // recomputeEnrichedRows(), debounced through enrichedRowsDebounce so a
+  // burst of near-simultaneous completions collapses into one recompute.
+  property var enrichedRows: []
+
+  function recomputeEnrichedRows() {
     var r = SentryModel.buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed, ghsaParsed, trivyParsed)
     if (epssParsed) r = SentryModel.epssMerge(r, epssParsed)
     if (exploitdbParsed) r = SentryModel.exploitMerge(r, exploitdbParsed)
     if (Object.keys(installedMap).length > 0) r = SentryModel.installMerge(r, installedMap)
-    return r
+    enrichedRows = r
   }
 
   readonly property var watchlist: {
@@ -489,6 +500,7 @@ Panel {
     archParsed = parsed
     initialized = true
     evaluateNotifications("arch")
+    enrichedRowsDebounce.restart()
     refreshTimer.restart()
   }
 
@@ -505,6 +517,7 @@ Panel {
     kevParsed = parsed
     initialized = true
     evaluateNotifications("kev")
+    enrichedRowsDebounce.restart()
     refreshTimer.restart()
   }
 
@@ -521,6 +534,7 @@ Panel {
     nvdParsed = parsed
     initialized = true
     evaluateNotifications("nvd")
+    enrichedRowsDebounce.restart()
   }
 
   function applyAlerts(exitCode, out, err) {
@@ -536,6 +550,7 @@ Panel {
     alertsParsed = parsed
     initialized = true
     evaluateNotifications("alerts")
+    enrichedRowsDebounce.restart()
   }
 
   function applyEpss(exitCode, out, err) {
@@ -550,6 +565,7 @@ Panel {
     }
     epssParsed = parsed
     initialized = true
+    enrichedRowsDebounce.restart()
   }
 
   function applyExploitdb(exitCode, out, err) {
@@ -564,6 +580,7 @@ Panel {
     }
     exploitdbParsed = parsed
     initialized = true
+    enrichedRowsDebounce.restart()
   }
 
   function applyOsv(exitCode, out, err) {
@@ -578,6 +595,7 @@ Panel {
     }
     osvParsed = parsed
     initialized = true
+    enrichedRowsDebounce.restart()
   }
 
   function applyGhsa(exitCode, out, err) {
@@ -592,6 +610,7 @@ Panel {
     }
     ghsaParsed = parsed
     initialized = true
+    enrichedRowsDebounce.restart()
   }
 
   function applyNeedrestart(exitCode, out, err) {
@@ -620,6 +639,7 @@ Panel {
     }
     trivyParsed = parsed
     initialized = true
+    enrichedRowsDebounce.restart()
   }
 
   // --- notifications --------------------------------------------------------
@@ -638,18 +658,23 @@ Panel {
 
     var now = Date.now()
     var fresh = []
+    // Built fresh here rather than read from enrichedRows: enrichedRows is
+    // now debounced (see its declaration above), so it can briefly lag the
+    // source that just landed. Notification timing must not depend on that
+    // debounce window, and buildRows() alone (no installMerge) is cheap.
+    var rows = SentryModel.buildRows(archParsed, kevParsed, nvdParsed, alertsParsed, osvParsed, ghsaParsed, trivyParsed)
     if (type === "arch" && notifyOnAffected) {
       fresh = SentryModel.newNotifiable(
-        SentryModel.filterByThreshold(SentryModel.archRows(enrichedRows), severityThreshold),
+        SentryModel.filterByThreshold(SentryModel.archRows(rows), severityThreshold),
         notified, now, notifyCooldownMs)
     } else if (type === "kev" && notifyOnKev) {
-      fresh = SentryModel.newNotifiable(SentryModel.kevRows(enrichedRows), notified, now, notifyCooldownMs)
+      fresh = SentryModel.newNotifiable(SentryModel.kevRows(rows), notified, now, notifyCooldownMs)
     } else if (type === "nvd" && notifyOnNvd) {
       fresh = SentryModel.newNotifiable(
-        SentryModel.filterByThreshold(SentryModel.nvdRows(enrichedRows), severityThreshold),
+        SentryModel.filterByThreshold(SentryModel.nvdRows(rows), severityThreshold),
         notified, now, notifyCooldownMs)
     } else if (type === "alerts" && notifyOnAlerts) {
-      fresh = SentryModel.newNotifiable(SentryModel.alertRows(enrichedRows), notified, now, notifyCooldownMs)
+      fresh = SentryModel.newNotifiable(SentryModel.alertRows(rows), notified, now, notifyCooldownMs)
     }
 
     if (fresh.length === 0) return
@@ -998,6 +1023,7 @@ Panel {
       var list = SentryModel.parsePackageList(installedStdout.text)
       for (var i = 0; i < list.length; i++) map[list[i].name] = list[i].version
       root.installedMap = map
+      root.enrichedRowsDebounce.restart()
     }
   }
 
@@ -1042,6 +1068,16 @@ Panel {
     interval: root.refreshIntervalMs
     repeat: true
     onTriggered: root.refresh()
+  }
+
+  // Coalesces a burst of fetch-source completions (unpause and startup both
+  // fire ~9 sources concurrently) into a single enrichedRows recompute. See
+  // the comment on enrichedRows above for why this exists.
+  Timer {
+    id: enrichedRowsDebounce
+    interval: 200
+    repeat: false
+    onTriggered: root.recomputeEnrichedRows()
   }
 
   // --- bar button + badge ----------------------------------------------------
@@ -1149,7 +1185,7 @@ Panel {
           spacing: Style.space(12)
 
           PanelHero {
-            title: "Threat Sentry"
+            title: "Cyber Sentry"
             meta: root.summary
             foreground: root.foreground
             fontFamily: root.fontFamily
