@@ -96,9 +96,11 @@ Panel {
   property var ghsaParsed: null
   property var installedMap: ({})
   property var aurPackages: []
+  property var flatpakPackages: []
+  readonly property var foreignPackages: SentryModel.foreignPackages(aurPackages, flatpakPackages)
   // Never fold into totalBadge/urgent color below: these are real installed
   // packages, not detected threats — only uncorrelated by Arch Security Tracker.
-  readonly property int aurCount: aurPackages.length
+  readonly property int foreignCount: foreignPackages.length
   property bool initialized: false
   property bool archFetching: false
   property bool kevFetching: false
@@ -114,7 +116,7 @@ Panel {
   property var history: []
   property bool historyLoaded: false
   property bool bootstrapDone: false
-  property int activeTab: 0  // 0=System, 1=Exploited, 2=Recent, 3=Alerts, 4=AUR, 5=Dev
+  property int activeTab: 0  // 0=System, 1=Exploited, 2=Recent, 3=Alerts, 4=Foreign, 5=Dev
   property string cveDetailTitle: ""
   property string cveDetailText: ""
   property bool cveDetailOpen: false
@@ -243,12 +245,12 @@ Panel {
       SentryModel.filterByThresholdOrWatched(SentryModel.osvRows(enrichedRows), severityThreshold, watchlist),
       dismissed)
   ), searchQuery).slice(0, maxItems)
-  readonly property var aurFiltered: SentryModel.filterBySearch(aurPackages, searchQuery)
+  readonly property var foreignFiltered: SentryModel.filterBySearch(foreignPackages, searchQuery)
   readonly property int dismissedCount: dismissed.length
 
   readonly property int badgeCount: SentryModel.affectedCount(archParsed, severityThreshold)
   readonly property int kevCount: kevFiltered.length
-  // Intentionally excludes aurCount — see its declaration above.
+  // Intentionally excludes foreignCount — see its declaration above.
   readonly property int totalBadge: showKevBadge ? badgeCount + kevCount : badgeCount
   readonly property bool badgeVisible: showBadge && totalBadge > 0 && !paused
 
@@ -746,6 +748,13 @@ Panel {
     installedProcess.running = true
     aurProcess.command = ["/usr/bin/pacman", "-Qm"]
     aurProcess.running = true
+    // Flatpak is optional and often absent — wrapped in a shell existence
+    // check so this always exits cleanly (empty output, not a Process
+    // failure) when it's not installed, rather than assuming
+    // /usr/bin/flatpak exists the way the pacman calls above safely can.
+    flatpakProcess.command = ["/bin/sh", "-c",
+      "command -v flatpak >/dev/null 2>&1 && flatpak list --app --columns=application,version || true"]
+    flatpakProcess.running = true
     refreshTimer.start()
     refresh()
   }
@@ -904,6 +913,19 @@ Panel {
     stdout: StdioCollector { id: aurStdout; waitForEnd: true }
     onExited: {
       root.aurPackages = SentryModel.sortByName(SentryModel.parsePackageList(aurStdout.text))
+    }
+  }
+
+  // Flatpak apps: sandboxed, entirely outside pacman, so Arch Security
+  // Tracker has no visibility into them either — same "uncovered" bucket
+  // as AUR packages, for the same underlying reason.
+  Process {
+    id: flatpakProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: flatpakStdout; waitForEnd: true }
+    onExited: {
+      root.flatpakPackages = SentryModel.sortByName(SentryModel.parseFlatpakList(flatpakStdout.text))
     }
   }
 
@@ -1106,10 +1128,10 @@ Panel {
 
           Text {
             width: parent.width
-            visible: root.aurCount > 0
+            visible: root.foreignCount > 0
             wrapMode: Text.Wrap
-            text: root.aurCount + " AUR/foreign package" + (root.aurCount === 1 ? "" : "s")
-              + " not tracked by Arch Security Tracker — see the AUR tab"
+            text: root.foreignCount + " AUR/Flatpak package" + (root.foreignCount === 1 ? "" : "s")
+              + " not tracked by Arch Security Tracker — see the Foreign tab"
             color: "#ffb020"
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -1166,7 +1188,7 @@ Panel {
               onClicked: root.activeTab = 3
             }
             TabButton {
-              tabLabel: "AUR (" + root.aurFiltered.length + ")"
+              tabLabel: "Foreign (" + root.foreignFiltered.length + ")"
               tabActive: root.activeTab === 4
               onClicked: root.activeTab = 4
             }
@@ -1458,7 +1480,7 @@ Panel {
             }
           }
 
-          // --- AUR tab ---------------------------------------------------------
+          // --- Foreign tab (AUR + Flatpak) --------------------------------------
           Rectangle {
             id: aurView
             readonly property real panelHeight: Style.space(340)
@@ -1477,7 +1499,7 @@ Panel {
                 id: aurHeader
                 width: parent.width
                 wrapMode: Text.Wrap
-                text: "Installed from the AUR or a foreign repo — Arch Security Tracker only tracks official [core]/[extra] packages, so these aren't covered by its per-package correlation. Check each package's AUR page or upstream project for advisories."
+                text: "Installed from the AUR, a foreign repo, or Flatpak — Arch Security Tracker only tracks official [core]/[extra] packages and has no visibility into Flatpak's sandboxed runtimes either, so none of these are covered by its per-package correlation. Check each package's AUR page, upstream project, or Flathub listing for advisories."
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1488,11 +1510,11 @@ Panel {
                 width: parent.width
                 height: aurView.panelHeight - aurHeader.implicitHeight - Style.space(6)
                 clip: true
-                model: root.aurFiltered
+                model: root.foreignFiltered
                 spacing: Style.space(3)
                 cacheBuffer: Style.space(60)
 
-                delegate: AurRowDelegate {
+                delegate: ForeignRowDelegate {
                   width: aurList.width
                 }
               }
@@ -1500,8 +1522,8 @@ Panel {
 
             Text {
               anchors.centerIn: parent
-              visible: root.aurFiltered.length === 0
-              text: root.aurCount === 0 ? "No AUR or foreign packages installed" : root.noMatchText("")
+              visible: root.foreignFiltered.length === 0
+              text: root.foreignCount === 0 ? "No AUR or Flatpak packages installed" : root.noMatchText("")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -2524,7 +2546,7 @@ Panel {
     }
   }
 
-  component AurRowDelegate: Rectangle {
+  component ForeignRowDelegate: Rectangle {
     required property var modelData
 
     implicitHeight: Style.space(40)
@@ -2540,12 +2562,22 @@ Panel {
       spacing: Style.space(8)
 
       Text {
-        width: parent.width - aurVersionLabel.implicitWidth - Style.space(8)
+        width: parent.width - aurSourceLabel.implicitWidth - aurVersionLabel.implicitWidth - Style.space(16)
         elide: Text.ElideRight
         text: modelData.name
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
+        font.bold: true
+      }
+
+      Text {
+        id: aurSourceLabel
+        anchors.verticalCenter: parent.verticalCenter
+        text: modelData.source || ""
+        color: modelData.source === "Flatpak" ? root.accentColor : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
         font.bold: true
       }
 

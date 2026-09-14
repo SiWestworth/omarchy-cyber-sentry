@@ -418,6 +418,36 @@ function parsePackageList(text) {
   return out
 }
 
+// `flatpak list --app --columns=application,version` output: one
+// tab-separated "app-id<TAB>version" pair per line. A missing version
+// (some runtimes/apps don't report one) still yields a row with an empty
+// version rather than being dropped, unlike parsePackageList's pacman
+// case — flatpak app IDs are unambiguous without one.
+function parseFlatpakList(text) {
+  var out = []
+  var lines = String(text || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var parts = lines[i].split("\t")
+    if (parts[0]) out.push({ name: parts[0], version: parts[1] || "" })
+  }
+  return out
+}
+
+// Combines AUR and Flatpak package lists into one, each entry tagged with
+// where it came from, sorted by name — both are "not covered by Arch
+// Security Tracker" for the same reason (neither is an official
+// [core]/[extra] package), so they share one tab.
+function foreignPackages(aurList, flatpakList) {
+  var tagged = []
+  for (var i = 0; i < aurList.length; i++) {
+    tagged.push({ name: aurList[i].name, version: aurList[i].version, source: "AUR" })
+  }
+  for (var j = 0; j < flatpakList.length; j++) {
+    tagged.push({ name: flatpakList[j].name, version: flatpakList[j].version, source: "Flatpak" })
+  }
+  return sortByName(tagged)
+}
+
 function firstCve(row) {
   // Deliberately duck-typed rather than Array.isArray(): rows read back out
   // of a ListView delegate's `modelData` marshal `cves` into a QML sequence

@@ -249,6 +249,21 @@ model_test=$(node -e "
   const pkgCount = pkgList.length;
   const sortedNames = mod.sortByName([{name:'zeta'},{name:'alpha'},{name:'Middle'}]).map(function(p){return p.name}).join(',');
 
+  // --- parseFlatpakList ---
+  const flatpakList = mod.parseFlatpakList('org.mozilla.firefox\t130.0\ncom.spotify.Client\t1.2.3\n\norg.no.version\t\n');
+  const flatpakNames = flatpakList.map(function(p){return p.name}).join(',');
+  const flatpakVersions = flatpakList.map(function(p){return p.version}).join(',');
+  const flatpakCount = flatpakList.length;
+
+  // --- foreignPackages (AUR + Flatpak merge) ---
+  const foreignMerged = mod.foreignPackages(
+    [{name:'yay-bin', version:'12.3-1'}],
+    [{name:'org.mozilla.firefox', version:'130.0'}]
+  );
+  const foreignSources = foreignMerged.map(function(p){return p.source}).sort().join(',');
+  const foreignSorted = foreignMerged.map(function(p){return p.name}).join(',');
+  const foreignEmptyBoth = mod.foreignPackages([], []).length;
+
   // --- watchlist ---
   const watchRow = mod.archRow({name:'AVG-99',severity:'Low',packages:'p',fixed:'1.0',cves:['CVE-2026-9999'],date:'2026-01-01'});
   const watchlist = ['CVE-2026-9999'];
@@ -388,6 +403,8 @@ model_test=$(node -e "
     riskKevRansomTier: riskKevRansom.tier, riskExploitOnlyTier: riskExploitOnly.tier,
     riskHighEpssTier: riskHighEpss.tier, riskExploitPlusEpssTier: riskExploitPlusEpss.tier,
     riskKevOnlyReasons: riskKevOnly.reasons.length, riskNullRowTier: riskNullRow.tier,
+    flatpakNames: flatpakNames, flatpakVersions: flatpakVersions, flatpakCount: flatpakCount,
+    foreignSources: foreignSources, foreignSorted: foreignSorted, foreignEmptyBoth: foreignEmptyBoth,
     isWatchedTrue: isWatchedTrue, isWatchedFalse: isWatchedFalse,
     isDismissedTrue: isDismissedTrue, isDismissedFalse: isDismissedFalse,
     dismissKeptIds: dismissKeptIds, dismissAfterWatchOverride: dismissAfterWatchOverride,
@@ -482,6 +499,18 @@ if [[ -n $model_test ]]; then
     jq -e '.riskKevOnlyReasons > 0' <<<"$model_test"
   t "SentryModel.riskScore: null row is LOW with no crash" \
     jq -e '.riskNullRowTier == "LOW"' <<<"$model_test"
+  t "SentryModel.parseFlatpakList: parses names" \
+    jq -e '.flatpakNames == "org.mozilla.firefox,com.spotify.Client,org.no.version"' <<<"$model_test"
+  t "SentryModel.parseFlatpakList: parses versions, missing version is empty not dropped" \
+    jq -e '.flatpakVersions == "130.0,1.2.3,"' <<<"$model_test"
+  t "SentryModel.parseFlatpakList: skips the blank line" \
+    jq -e '.flatpakCount == 3' <<<"$model_test"
+  t "SentryModel.foreignPackages: tags each entry with its source" \
+    jq -e '.foreignSources == "AUR,Flatpak"' <<<"$model_test"
+  t "SentryModel.foreignPackages: AUR and Flatpak entries sorted together by name" \
+    jq -e '.foreignSorted == "org.mozilla.firefox,yay-bin"' <<<"$model_test"
+  t "SentryModel.foreignPackages: empty when both sources are empty" \
+    jq -e '.foreignEmptyBoth == 0' <<<"$model_test"
   t "SentryModel.alertRow: type is alert" \
     jq -e '.alertType == "alert"' <<<"$model_test"
   t "SentryModel.buildRows: 6 source types" \

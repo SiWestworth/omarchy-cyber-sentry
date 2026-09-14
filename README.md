@@ -25,16 +25,19 @@ It correlates live security data against the packages actually installed on this
 | **cve.org** | On-demand detail lookup: click any row to pull the full CVE description, severity score, and references. |
 | **OSV.dev** | Scans your globally-installed pip/npm/cargo/go packages against OSV.dev's vulnerability database — coverage Arch Security Tracker can't provide, since it only tracks official Arch packages. |
 
-## AUR / foreign-package coverage
+## AUR / Flatpak coverage
 
 Arch Security Tracker only tracks official `[core]`/`[extra]` repo packages — it
-has no per-package/per-version correlation for anything installed from the AUR
-or another foreign repo. Cyber Sentry surfaces that gap explicitly with a
-dedicated **AUR** tab listing every foreign package installed (`pacman -Qm`), so
-you know exactly which packages fall outside the Arch tracker's precise
-coverage rather than assuming they're silently "clean." These packages are
-never counted toward the affected-package badge — they're not detected
-threats, just uncovered ones.
+has no per-package/per-version correlation for anything installed from the AUR,
+another foreign repo, or Flatpak (a completely separate, sandboxed package
+system outside pacman entirely). Cyber Sentry surfaces that gap explicitly with
+a dedicated **Foreign** tab listing every AUR/foreign-repo package
+(`pacman -Qm`) and every installed Flatpak app (`flatpak list`, skipped
+gracefully if Flatpak isn't installed), each tagged with its source, so you
+know exactly which packages fall outside precise coverage rather than
+assuming they're silently "clean." These packages are never counted toward
+the affected-package badge — they're not detected threats, just uncovered
+ones.
 
 ## Dev-package coverage (pip/npm/cargo/go)
 
@@ -191,7 +194,7 @@ completely clean uninstall.
 - **Every 30 minutes** (configurable) the fetch scripts run. They are plain Bash — no Python, no Node, no network dependencies beyond `curl` and `jq`.
 - The correlation logic runs in the bash script itself, not in QML or JavaScript. This keeps the panel lightweight and the logic auditable.
 - `vercmp` (from `pacman`) handles Arch's epoch and pkgrel conventions correctly.
-- The panel renders rows sorted by severity (highest first) in the System and Dev tabs, by date added (newest first) in the Exploited/Recent/Alerts tabs, and alphabetically in the AUR tab.
+- The panel renders rows sorted by severity (highest first) in the System and Dev tabs, by date added (newest first) in the Exploited/Recent/Alerts tabs, and alphabetically (AUR and Flatpak entries mixed together) in the Foreign tab.
 
 ## Settings
 
@@ -236,7 +239,7 @@ Open the Omarchy settings UI and configure these under the **Cyber Sentry** sect
 | `2` | Switch to Exploited tab |
 | `3` | Switch to Recent (NVD) tab |
 | `4` | Switch to Alerts tab |
-| `5` | Switch to AUR tab |
+| `5` | Switch to Foreign (AUR/Flatpak) tab |
 | `6` | Switch to Dev tab |
 | `q` | Close CVE detail overlay (if open) |
 | `Esc` | Close the panel |
@@ -253,6 +256,7 @@ Notification history is persisted at `~/.local/state/omarchy/settings/cyber-sent
 - A Nerd Font (for the shield and status glyphs on the bar)
 - Optional, for the Dev tab: `pip`, `npm`, `cargo`, and/or `go` — each is
   independently optional; the Dev tab just scans whichever are present
+- Optional, for the Foreign tab: `flatpak` — skipped gracefully if absent
 
 ## Testing
 
