@@ -269,6 +269,14 @@ Panel {
     }
   }
 
+  function riskColor(tier) {
+    switch (tier) {
+      case "CRITICAL": return urgent
+      case "HIGH": return Qt.rgba(urgent.r, urgent.g, urgent.b, 0.75)
+      default: return dim
+    }
+  }
+
   readonly property string archStatusLabel: {
     if (!archEnabled) return "off"
     if (archFetching) return "syncing"
@@ -1924,6 +1932,42 @@ Panel {
     }
   }
 
+  // Only visible for the worst rows (tier HIGH/CRITICAL) — a quiet signal
+  // that this one combines multiple danger signs, not a badge on every row.
+  component RiskBadge: Rectangle {
+    id: riskBadge
+    property var row: null
+    readonly property var risk: SentryModel.riskScore(row)
+
+    visible: risk.tier === "HIGH" || risk.tier === "CRITICAL"
+    implicitWidth: visible ? riskBadgeText.implicitWidth + Style.space(6) : 0
+    implicitHeight: visible ? riskBadgeText.implicitHeight + Style.space(2) : 0
+    radius: Style.space(3)
+    color: root.riskColor(risk.tier)
+
+    Text {
+      id: riskBadgeText
+      anchors.centerIn: parent
+      text: riskBadge.risk.tier + " RISK"
+      color: "white"
+      font.family: root.fontFamily
+      font.pixelSize: Math.max(7, Math.round(Style.font.caption * 0.72))
+      font.bold: true
+    }
+
+    PanelToolTip {
+      visible: riskArea.containsMouse
+      text: riskBadge.risk.reasons.join(" · ")
+      fontFamily: root.fontFamily
+    }
+
+    MouseArea {
+      id: riskArea
+      anchors.fill: parent
+      hoverEnabled: true
+    }
+  }
+
   component InstalledTag: Rectangle {
     property bool isInstalled: false
     visible: isInstalled
@@ -1983,7 +2027,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
-          width: parent.width - archSevLabel.implicitWidth - archEdbTag.implicitWidth - archEpssBadge.implicitWidth - archWatchStar.implicitWidth - archDismissButton.implicitWidth - Style.space(24)
+          width: parent.width - archSevLabel.implicitWidth - archRiskBadge.implicitWidth - archEdbTag.implicitWidth - archEpssBadge.implicitWidth - archWatchStar.implicitWidth - archDismissButton.implicitWidth - Style.space(28)
           elide: Text.ElideRight
           text: modelData.id
           color: root.foreground
@@ -2000,6 +2044,12 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           font.bold: true
+        }
+
+        RiskBadge {
+          id: archRiskBadge
+          anchors.verticalCenter: parent.verticalCenter
+          row: modelData
         }
 
         EpssBadge {
@@ -2095,7 +2145,7 @@ Panel {
         spacing: Style.space(6)
 
         Text {
-          width: parent.width - kevRansomLabel.implicitWidth - kevInstalledTag.implicitWidth - kevEpssBadge.implicitWidth - kevEdbTag.implicitWidth - kevWatchStar.implicitWidth - kevDismissButton.implicitWidth - Style.space(20)
+          width: parent.width - kevRansomLabel.implicitWidth - kevRiskBadge.implicitWidth - kevInstalledTag.implicitWidth - kevEpssBadge.implicitWidth - kevEdbTag.implicitWidth - kevWatchStar.implicitWidth - kevDismissButton.implicitWidth - Style.space(24)
           elide: Text.ElideRight
           text: modelData.id
           color: root.foreground
@@ -2113,6 +2163,12 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Math.max(7, Math.round(Style.font.caption * 0.78))
           font.bold: true
+        }
+
+        RiskBadge {
+          id: kevRiskBadge
+          anchors.verticalCenter: parent.verticalCenter
+          row: modelData
         }
 
         InstalledTag {
@@ -2217,7 +2273,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
-          width: parent.width - nvdSevLabel.implicitWidth - nvdScoreLabel.implicitWidth - nvdEpssBadge.implicitWidth - nvdEdbTag.implicitWidth - nvdWatchStar.implicitWidth - nvdDismissButton.implicitWidth - Style.space(24)
+          width: parent.width - nvdSevLabel.implicitWidth - nvdRiskBadge.implicitWidth - nvdScoreLabel.implicitWidth - nvdEpssBadge.implicitWidth - nvdEdbTag.implicitWidth - nvdWatchStar.implicitWidth - nvdDismissButton.implicitWidth - Style.space(28)
           elide: Text.ElideRight
           text: modelData.id
           color: root.foreground
@@ -2234,6 +2290,12 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           font.bold: true
+        }
+
+        RiskBadge {
+          id: nvdRiskBadge
+          anchors.verticalCenter: parent.verticalCenter
+          row: modelData
         }
 
         Text {
@@ -2332,7 +2394,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
-          width: parent.width - osvSevLabel.implicitWidth - osvEpssBadge.implicitWidth - osvEdbTag.implicitWidth - osvWatchStar.implicitWidth - osvDismissButton.implicitWidth - Style.space(20)
+          width: parent.width - osvSevLabel.implicitWidth - osvRiskBadge.implicitWidth - osvEpssBadge.implicitWidth - osvEdbTag.implicitWidth - osvWatchStar.implicitWidth - osvDismissButton.implicitWidth - Style.space(24)
           elide: Text.ElideRight
           text: modelData.ecosystem + " · " + modelData.packages + " " + modelData.version
           color: root.foreground
@@ -2349,6 +2411,12 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           font.bold: true
+        }
+
+        RiskBadge {
+          id: osvRiskBadge
+          anchors.verticalCenter: parent.verticalCenter
+          row: modelData
         }
 
         EpssBadge {

@@ -109,6 +109,18 @@ actually being clear. Typing in the box doesn't trigger the `r`/`p`/number
 shortcuts below; press `Esc` once to clear and unfocus it, again to close
 the panel.
 
+## Composite risk badge
+
+A small **HIGH RISK** / **CRITICAL RISK** badge appears next to the
+severity label — but only for rows where it's genuinely warranted, so it
+never clutters the common case. It blends four signals a user would
+otherwise have to mentally combine: CISA KEV membership, the ransomware
+flag, whether a public exploit is on file, and the EPSS exploit-probability
+score. Hover it for the specific reasons (e.g. "actively exploited in the
+wild (CISA KEV) · used in ransomware campaigns"). Any single strong signal
+(KEV, or a very high EPSS score) can reach HIGH on its own; two or more
+together typically push into CRITICAL.
+
 ## CVE watchlist
 
 Click the star next to any Arch/KEV/NVD/Dev row to pin it. Watchlisted CVEs

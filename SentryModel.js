@@ -468,6 +468,51 @@ function epssLabel(epss) {
   return Math.round(v * 100) + "%"
 }
 
+// Composite "how dangerous is this, really" signal, blending four things a
+// user would otherwise have to mentally combine themselves: KEV membership
+// (already known to be exploited in the wild — the strongest single
+// signal), the ransomware flag, whether a public exploit is on file, and
+// the EPSS exploit-probability score. Points are additive and deliberately
+// generous for KEV/ransomware since those are near-certainties rather than
+// probabilities; two lesser signals together (e.g. a public exploit plus
+// moderate EPSS) can still cross into HIGH the same way one strong signal
+// does.
+function riskScore(row) {
+  var points = 0
+  var reasons = []
+  if (!row) return { tier: "LOW", points: 0, reasons: reasons }
+
+  if (row.type === "kev") {
+    points += 40
+    reasons.push("actively exploited in the wild (CISA KEV)")
+  }
+  if (row.ransomware) {
+    points += 30
+    reasons.push("used in ransomware campaigns")
+  }
+  if (row.exploitTitles && row.exploitTitles.length > 0) {
+    points += 20
+    reasons.push("public exploit available")
+  }
+  var epss = parseFloat(row.epss || "0")
+  if (!isNaN(epss) && epss > 0) {
+    if (epss >= 0.5) {
+      points += 20
+      reasons.push("EPSS " + Math.round(epss * 100) + "% likely to be exploited")
+    } else if (epss >= 0.1) {
+      points += 10
+      reasons.push("EPSS " + Math.round(epss * 100) + "% likely to be exploited")
+    }
+  }
+
+  var tier = "LOW"
+  if (points >= 50) tier = "CRITICAL"
+  else if (points >= 30) tier = "HIGH"
+  else if (points >= 10) tier = "ELEVATED"
+
+  return { tier: tier, points: points, reasons: reasons }
+}
+
 // --- Notification helpers --------------------------------------------------
 
 function newNotifiable(rows, notified, now, cooldownMs) {

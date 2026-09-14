@@ -282,6 +282,28 @@ model_test=$(node -e "
   const searchFilteredIds = mod.filterBySearch([searchRow, watchRow], 'openssl').map(function(r){return r.id}).join(',');
   const searchFilteredEmptyQuery = mod.filterBySearch([searchRow, watchRow], '').length;
 
+  // --- riskScore ---
+  const riskPlain = mod.riskScore(mod.archRow({name:'AVG-90',severity:'Low',packages:'p',fixed:'1.0',cves:['CVE-2026-9990'],date:'2026-01-01'}));
+  const riskKevOnly = mod.riskScore(mod.kevRow({cveID:'CVE-2026-9991',vendorProject:'X',product:'Y',dateAdded:'2026-01-01'}));
+  const riskKevRansom = mod.riskScore(mod.kevRow({cveID:'CVE-2026-9992',vendorProject:'X',product:'Y',dateAdded:'2026-01-01',knownRansomwareCampaignUse:'Known'}));
+  const riskExploitOnly = (function() {
+    var r = mod.archRow({name:'AVG-91',severity:'High',packages:'q',fixed:'1.0',cves:['CVE-2026-9993'],date:'2026-01-01'});
+    r.exploitTitles = ['Some PoC'];
+    return mod.riskScore(r);
+  })();
+  const riskHighEpss = (function() {
+    var r = mod.archRow({name:'AVG-92',severity:'High',packages:'r',fixed:'1.0',cves:['CVE-2026-9994'],date:'2026-01-01'});
+    r.epss = '0.6';
+    return mod.riskScore(r);
+  })();
+  const riskExploitPlusEpss = (function() {
+    var r = mod.archRow({name:'AVG-93',severity:'High',packages:'s',fixed:'1.0',cves:['CVE-2026-9995'],date:'2026-01-01'});
+    r.exploitTitles = ['Some PoC'];
+    r.epss = '0.15';
+    return mod.riskScore(r);
+  })();
+  const riskNullRow = mod.riskScore(null);
+
   // --- trend history ---
   var hist = [];
   hist = mod.appendHistoryPoint(hist, {t:'2026-01-01T00:00:00Z', badgeCount:1, kevCount:2}, 3);
@@ -362,6 +384,10 @@ model_test=$(node -e "
     searchNoMatch: searchNoMatch, searchEmptyQueryMatches: searchEmptyQueryMatches,
     searchAurPackage: searchAurPackage, searchFilteredIds: searchFilteredIds,
     searchFilteredEmptyQuery: searchFilteredEmptyQuery,
+    riskPlainTier: riskPlain.tier, riskKevOnlyTier: riskKevOnly.tier,
+    riskKevRansomTier: riskKevRansom.tier, riskExploitOnlyTier: riskExploitOnly.tier,
+    riskHighEpssTier: riskHighEpss.tier, riskExploitPlusEpssTier: riskExploitPlusEpss.tier,
+    riskKevOnlyReasons: riskKevOnly.reasons.length, riskNullRowTier: riskNullRow.tier,
     isWatchedTrue: isWatchedTrue, isWatchedFalse: isWatchedFalse,
     isDismissedTrue: isDismissedTrue, isDismissedFalse: isDismissedFalse,
     dismissKeptIds: dismissKeptIds, dismissAfterWatchOverride: dismissAfterWatchOverride,
@@ -440,6 +466,22 @@ if [[ -n $model_test ]]; then
     jq -e '.searchFilteredIds == "AVG-96"' <<<"$model_test"
   t "SentryModel.filterBySearch: empty query keeps everything" \
     jq -e '.searchFilteredEmptyQuery == 2' <<<"$model_test"
+  t "SentryModel.riskScore: plain low-severity row is LOW" \
+    jq -e '.riskPlainTier == "LOW"' <<<"$model_test"
+  t "SentryModel.riskScore: KEV membership alone is HIGH" \
+    jq -e '.riskKevOnlyTier == "HIGH"' <<<"$model_test"
+  t "SentryModel.riskScore: KEV + ransomware is CRITICAL" \
+    jq -e '.riskKevRansomTier == "CRITICAL"' <<<"$model_test"
+  t "SentryModel.riskScore: public exploit alone is ELEVATED" \
+    jq -e '.riskExploitOnlyTier == "ELEVATED"' <<<"$model_test"
+  t "SentryModel.riskScore: high EPSS alone is ELEVATED" \
+    jq -e '.riskHighEpssTier == "ELEVATED"' <<<"$model_test"
+  t "SentryModel.riskScore: exploit + moderate EPSS combine to HIGH" \
+    jq -e '.riskExploitPlusEpssTier == "HIGH"' <<<"$model_test"
+  t "SentryModel.riskScore: reasons list is non-empty when points > 0" \
+    jq -e '.riskKevOnlyReasons > 0' <<<"$model_test"
+  t "SentryModel.riskScore: null row is LOW with no crash" \
+    jq -e '.riskNullRowTier == "LOW"' <<<"$model_test"
   t "SentryModel.alertRow: type is alert" \
     jq -e '.alertType == "alert"' <<<"$model_test"
   t "SentryModel.buildRows: 6 source types" \
