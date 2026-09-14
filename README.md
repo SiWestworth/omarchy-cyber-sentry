@@ -205,6 +205,19 @@ Alternatively, clone or copy this repo's contents directly into
 `~/.config/omarchy/plugins/cyber.sentry` and run
 `omarchy plugin enable cyber.sentry right`.
 
+## Update
+
+```
+omarchy plugin update cyber.sentry
+```
+
+Pulls the latest commit from this repo and reloads the plugin. This only
+works if you installed with `omarchy plugin add` (git-managed); if you
+instead cloned or copied the repo manually, `git pull` inside
+`~/.config/omarchy/plugins/cyber.sentry` yourself. Omitting the plugin id
+(`omarchy plugin update`) updates every git-managed plugin you have
+installed, not just this one.
+
 ## Uninstall
 
 ```
