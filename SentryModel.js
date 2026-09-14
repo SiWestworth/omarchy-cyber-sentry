@@ -88,6 +88,31 @@ function filterOutDismissed(rows, dismissedList) {
   return rows.filter(function(r) { return !isDismissed(r, dismissedList) })
 }
 
+// Free-text filter shared by every tab, including the plain {name, version}
+// objects the AUR tab uses (not a "row" at all). Deliberately defensive
+// about field presence rather than switching on row.type, since each
+// source's row shape carries a different subset of these fields (a KEV row
+// has vendor/product/name, an arch row has packages, an OSV row has
+// ecosystem, etc.) — checking whichever exist is simpler and safer than
+// keeping a type-to-fields map in sync as new sources get added.
+var SEARCH_FIELDS = ["id", "packages", "description", "vendor", "product", "name", "title", "ecosystem", "version"]
+
+function matchesSearch(row, query) {
+  var q = String(query || "").trim().toLowerCase()
+  if (!q || !row) return true
+  for (var i = 0; i < SEARCH_FIELDS.length; i++) {
+    var v = row[SEARCH_FIELDS[i]]
+    if (v && String(v).toLowerCase().indexOf(q) >= 0) return true
+  }
+  return false
+}
+
+function filterBySearch(rows, query) {
+  var q = String(query || "").trim()
+  if (!q) return rows
+  return rows.filter(function(r) { return matchesSearch(r, q) })
+}
+
 // --- Row builders ----------------------------------------------------------
 
 function archRow(a) {

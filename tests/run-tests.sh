@@ -271,6 +271,17 @@ model_test=$(node -e "
     watchlist
   ).length === 0;
 
+  // --- search ---
+  const searchRow = mod.archRow({name:'AVG-96',severity:'High',packages:'openssl=3.0',fixed:'3.1',cves:['CVE-2026-9996'],date:'2026-01-01'});
+  const searchMatchId = mod.matchesSearch(searchRow, 'AVG-96');
+  const searchMatchPkg = mod.matchesSearch(searchRow, 'openssl');
+  const searchMatchCase = mod.matchesSearch(searchRow, 'OPENSSL');
+  const searchNoMatch = mod.matchesSearch(searchRow, 'nginx');
+  const searchEmptyQueryMatches = mod.matchesSearch(searchRow, '');
+  const searchAurPackage = mod.matchesSearch({name:'yay-bin', version:'12.3.5-1'}, 'yay');
+  const searchFilteredIds = mod.filterBySearch([searchRow, watchRow], 'openssl').map(function(r){return r.id}).join(',');
+  const searchFilteredEmptyQuery = mod.filterBySearch([searchRow, watchRow], '').length;
+
   // --- trend history ---
   var hist = [];
   hist = mod.appendHistoryPoint(hist, {t:'2026-01-01T00:00:00Z', badgeCount:1, kevCount:2}, 3);
@@ -347,6 +358,10 @@ model_test=$(node -e "
     ghsaWithCveCve: ghsaWithCveCve, ghsaWithCveDesc: ghsaWithCveDesc,
     ghsaNoCveCve: ghsaNoCveCve, ghsaNoCveDesc: ghsaNoCveDesc,
     mergedIds: mergedIds,
+    searchMatchId: searchMatchId, searchMatchPkg: searchMatchPkg, searchMatchCase: searchMatchCase,
+    searchNoMatch: searchNoMatch, searchEmptyQueryMatches: searchEmptyQueryMatches,
+    searchAurPackage: searchAurPackage, searchFilteredIds: searchFilteredIds,
+    searchFilteredEmptyQuery: searchFilteredEmptyQuery,
     isWatchedTrue: isWatchedTrue, isWatchedFalse: isWatchedFalse,
     isDismissedTrue: isDismissedTrue, isDismissedFalse: isDismissedFalse,
     dismissKeptIds: dismissKeptIds, dismissAfterWatchOverride: dismissAfterWatchOverride,
@@ -409,6 +424,22 @@ if [[ -n $model_test ]]; then
     jq -e '.ghsaNoCveDesc | contains("+2 more")' <<<"$model_test"
   t "SentryModel.mergeNvdAndGhsa: drops a GHSA entry duplicating an NVD CVE" \
     jq -e '.mergedIds == "CVE-2026-8000,GHSA-new"' <<<"$model_test"
+  t "SentryModel.matchesSearch: matches on id" \
+    jq -e '.searchMatchId == true' <<<"$model_test"
+  t "SentryModel.matchesSearch: matches on packages" \
+    jq -e '.searchMatchPkg == true' <<<"$model_test"
+  t "SentryModel.matchesSearch: case-insensitive" \
+    jq -e '.searchMatchCase == true' <<<"$model_test"
+  t "SentryModel.matchesSearch: false when nothing matches" \
+    jq -e '.searchNoMatch == false' <<<"$model_test"
+  t "SentryModel.matchesSearch: empty query always matches" \
+    jq -e '.searchEmptyQueryMatches == true' <<<"$model_test"
+  t "SentryModel.matchesSearch: works on plain AUR {name,version} objects" \
+    jq -e '.searchAurPackage == true' <<<"$model_test"
+  t "SentryModel.filterBySearch: keeps only the matching row" \
+    jq -e '.searchFilteredIds == "AVG-96"' <<<"$model_test"
+  t "SentryModel.filterBySearch: empty query keeps everything" \
+    jq -e '.searchFilteredEmptyQuery == 2' <<<"$model_test"
   t "SentryModel.alertRow: type is alert" \
     jq -e '.alertType == "alert"' <<<"$model_test"
   t "SentryModel.buildRows: 6 source types" \

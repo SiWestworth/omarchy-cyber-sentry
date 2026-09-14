@@ -89,6 +89,18 @@ down rather than only seeing a single point-in-time snapshot. It appears once
 enough history has been recorded (a couple of refresh cycles) and can be
 turned off in settings.
 
+## Search
+
+A search box sits above the tabs and filters whichever tab is active by
+substring match against its CVE/GHSA id, package name, vendor/product,
+description, and (on the Dev tab) ecosystem — including the AUR tab's plain
+package list. Tab counts update to reflect the filtered results, and each
+tab's usual empty-state message is replaced with "No matches for ..." while
+a search is active, so it's never confused with the underlying feed
+actually being clear. Typing in the box doesn't trigger the `r`/`p`/number
+shortcuts below; press `Esc` once to clear and unfocus it, again to close
+the panel.
+
 ## CVE watchlist
 
 Click the star next to any Arch/KEV/NVD/Dev row to pin it. Watchlisted CVEs

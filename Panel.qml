@@ -212,32 +212,38 @@ Panel {
     saveConfig({ dismissed: [] })
   }
 
-  readonly property var systemRows: SentryModel.sortBySeverity(
+  property string searchQuery: ""
+
+  readonly property var systemRows: SentryModel.filterBySearch(SentryModel.sortBySeverity(
     SentryModel.filterOutDismissed(
       SentryModel.filterByThresholdOrWatched(SentryModel.archRows(enrichedRows), severityThreshold, watchlist),
       dismissed)
-  ).slice(0, maxItems)
+  ), searchQuery).slice(0, maxItems)
   readonly property var fixSummary: SentryModel.fixableSummary(systemRows)
   readonly property var kevFiltered: {
     var kRows = SentryModel.kevRows(enrichedRows)
     if (kevRecentDays > 0) kRows = SentryModel.kevRecentFilter(kRows, kevRecentDays)
     if (kevAffectsMeOnly) kRows = kRows.filter(function(r) { return r.installed })
     kRows = SentryModel.filterOutDismissed(kRows, dismissed)
+    kRows = SentryModel.filterBySearch(kRows, searchQuery)
     return SentryModel.sortByDateDesc(kRows).slice(0, maxItems)
   }
-  readonly property var nvdRows: SentryModel.sortBySeverity(
+  readonly property var nvdRows: SentryModel.filterBySearch(SentryModel.sortBySeverity(
     SentryModel.filterOutDismissed(
       SentryModel.filterByThresholdOrWatched(
         SentryModel.mergeNvdAndGhsa(SentryModel.nvdRows(enrichedRows), SentryModel.ghsaRows(enrichedRows)),
         severityThreshold, watchlist),
       dismissed)
+  ), searchQuery).slice(0, maxItems)
+  readonly property var alertRows: SentryModel.filterBySearch(
+    SentryModel.sortByDateDesc(SentryModel.alertRows(enrichedRows)), searchQuery
   ).slice(0, maxItems)
-  readonly property var alertRows: SentryModel.sortByDateDesc(SentryModel.alertRows(enrichedRows)).slice(0, maxItems)
-  readonly property var osvRows: SentryModel.sortBySeverity(
+  readonly property var osvRows: SentryModel.filterBySearch(SentryModel.sortBySeverity(
     SentryModel.filterOutDismissed(
       SentryModel.filterByThresholdOrWatched(SentryModel.osvRows(enrichedRows), severityThreshold, watchlist),
       dismissed)
-  ).slice(0, maxItems)
+  ), searchQuery).slice(0, maxItems)
+  readonly property var aurFiltered: SentryModel.filterBySearch(aurPackages, searchQuery)
   readonly property int dismissedCount: dismissed.length
 
   readonly property int badgeCount: SentryModel.affectedCount(archParsed, severityThreshold)
@@ -679,6 +685,13 @@ Panel {
     Util.execDetached("printf %s " + Util.shellQuote(value) + " | wl-copy")
   }
 
+  // Every tab's empty state should say so distinctly when the search box is
+  // why the list is empty, rather than showing a feed-specific "all clear"/
+  // "disabled" message that would otherwise be misleading during a search.
+  function noMatchText(fallback) {
+    return searchQuery !== "" ? ("No matches for \"" + searchQuery + "\"") : fallback
+  }
+
   function applyCveDetail(exitCode, out, err) {
     var parsed = null
     if (exitCode === 0) {
@@ -947,6 +960,12 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // Keys.priority: BeforeItem means this handler normally gets every
+      // keystroke first, even while searchField has focus — without this,
+      // typing "r" into the search box would trigger the refresh shortcut
+      // instead of the letter "r". This is the documented escape hatch
+      // (see PanelKeyCatcher.qml's own comment).
+      blocked: searchField.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) {
         if (direction > 0) root.activeTab = Math.min(5, root.activeTab + 1)
@@ -1078,6 +1097,24 @@ Panel {
             }
           }
 
+          TextField {
+            id: searchField
+            width: parent.width
+            placeholderText: "Search…"
+            text: root.searchQuery
+            verticalPadding: Style.space(4)
+            onTextChanged: root.searchQuery = text
+            // keyCatcher is blocked while this has focus (see its own
+            // comment), so Escape reaches here instead of closing the
+            // panel — clear and drop focus instead, so the panel's own
+            // Escape-to-close still works on a second press.
+            Keys.onEscapePressed: function(event) {
+              text = ""
+              focus = false
+              event.accepted = true
+            }
+          }
+
           // Tab row
           Row {
             id: tabRow
@@ -1085,7 +1122,7 @@ Panel {
             spacing: Style.space(4)
 
             TabButton {
-              tabLabel: "System (" + SentryModel.archRows(root.enrichedRows).length + ")"
+              tabLabel: "System (" + root.systemRows.length + ")"
               tabActive: root.activeTab === 0
               onClicked: root.activeTab = 0
             }
@@ -1105,7 +1142,7 @@ Panel {
               onClicked: root.activeTab = 3
             }
             TabButton {
-              tabLabel: "AUR (" + root.aurCount + ")"
+              tabLabel: "AUR (" + root.aurFiltered.length + ")"
               tabActive: root.activeTab === 4
               onClicked: root.activeTab = 4
             }
@@ -1226,7 +1263,7 @@ Panel {
               anchors.centerIn: parent
               visible: root.archEnabled && (root.archParsed === null || SentryModel.sourceOk(root.archParsed))
                 && systemList.count === 0 && root.initialized
-              text: root.initialized ? "No affected advisories on your installed packages — you are up to date" : "Loading…"
+              text: !root.initialized ? "Loading…" : root.noMatchText("No affected advisories on your installed packages — you are up to date")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -1281,7 +1318,7 @@ Panel {
               anchors.centerIn: parent
               visible: root.kevEnabled && (root.kevParsed === null || SentryModel.sourceOk(root.kevParsed))
                 && kevList.count === 0 && root.initialized
-              text: root.initialized ? "No exploited vulnerabilities matching filters" : "Loading…"
+              text: !root.initialized ? "Loading…" : root.noMatchText("No exploited vulnerabilities matching filters")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -1336,7 +1373,7 @@ Panel {
               anchors.centerIn: parent
               visible: root.nvdEnabled && (root.nvdParsed === null || SentryModel.sourceOk(root.nvdParsed))
                 && nvdList.count === 0 && root.initialized
-              text: root.initialized ? "No recent High/Critical CVEs" : "Loading…"
+              text: !root.initialized ? "Loading…" : root.noMatchText("No recent High/Critical CVEs")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -1390,7 +1427,7 @@ Panel {
               anchors.centerIn: parent
               visible: root.alertsEnabled && (root.alertsParsed === null || SentryModel.sourceOk(root.alertsParsed))
                 && alertsList.count === 0 && root.initialized
-              text: root.initialized ? "No recent vendor advisories" : "Loading…"
+              text: !root.initialized ? "Loading…" : root.noMatchText("No recent vendor advisories")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -1427,7 +1464,7 @@ Panel {
                 width: parent.width
                 height: aurView.panelHeight - aurHeader.implicitHeight - Style.space(6)
                 clip: true
-                model: root.aurPackages
+                model: root.aurFiltered
                 spacing: Style.space(3)
                 cacheBuffer: Style.space(60)
 
@@ -1439,8 +1476,8 @@ Panel {
 
             Text {
               anchors.centerIn: parent
-              visible: root.aurCount === 0
-              text: "No AUR or foreign packages installed"
+              visible: root.aurFiltered.length === 0
+              text: root.aurCount === 0 ? "No AUR or foreign packages installed" : root.noMatchText("")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -1497,9 +1534,9 @@ Panel {
                 && osvList.count === 0 && root.initialized
               width: parent.width - Style.space(24)
               horizontalAlignment: Text.AlignHCenter
-              text: root.initialized
-                ? "No vulnerabilities found in your global pip/npm/cargo/go packages"
-                : "Loading…"
+              text: !root.initialized
+                ? "Loading…"
+                : root.noMatchText("No vulnerabilities found in your global pip/npm/cargo/go packages")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
