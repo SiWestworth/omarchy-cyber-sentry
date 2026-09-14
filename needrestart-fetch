@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# Kernel-reboot-needed check via needrestart's batch output.
+#
+# Usage: needrestart-fetch [--force]
+#
+# Deliberately scoped to kernel status only (NEEDRESTART-KSTA), not full
+# service/process restart detection: enumerating other processes' open
+# files needs root, which a bar widget silently invoking sudo would be a
+# real overreach. Kernel status alone doesn't need elevated privileges and
+# is still genuinely useful — "you updated your kernel, reboot to run it."
+#
+# Prints {"ok":true,"source":"needrestart","checkedAt":...,"available":bool,"kernelStatus":"current"|"outdated"|"unknown"}
+# or {"ok":false,"error":"..."} — exiting 0 either way.
+
+set -uo pipefail
+
+readonly CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cyber-sentry"
+readonly CACHE_FILE="$CACHE_DIR/needrestart-status.json"
+readonly TTL="${SENTRY_NEEDRESTART_TTL:-300}"
+
+source "${BASH_SOURCE[0]%/*}/_sentry-lib.sh"
+
+die() {
+  "$SENTRY_BIN_JQ" -cn --arg m "$1" '{ok:false, source:"needrestart", error:$m}'
+  exit 0
+}
+
+sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use"
+
+needs_refresh() {
+  [[ -s $CACHE_FILE ]] || return 0
+  local now age
+  now=$("$SENTRY_BIN_DATE" +%s)
+  age=$((now - $("$SENTRY_BIN_STAT" -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
+  (( age >= TTL ))
+}
+
+if [[ ${1:-} == --force ]] || needs_refresh; then
+  tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
+  checked="$("$SENTRY_BIN_DATE" -u +%FT%TZ)"
+
+  if nr_bin=$(sentry_find_optional_bin "${SENTRY_TEST_NEEDRESTART:-}" /usr/bin/needrestart /usr/sbin/needrestart); then
+    raw=$("$nr_bin" -b 2>/dev/null)
+    ksta_code=$(printf '%s\n' "$raw" | "$SENTRY_BIN_GREP" -m1 '^NEEDRESTART-KSTA:' | "$SENTRY_BIN_SED" 's/^NEEDRESTART-KSTA:[[:space:]]*//')
+    case "$ksta_code" in
+      1) status="current" ;;
+      2) status="outdated" ;;
+      *) status="unknown" ;;
+    esac
+    "$SENTRY_BIN_JQ" -cn --arg checked "$checked" --arg status "$status" \
+      '{ok:true, source:"needrestart", checkedAt:$checked, available:true, kernelStatus:$status}' > "$tmp" 2>/dev/null
+  else
+    "$SENTRY_BIN_JQ" -cn --arg checked "$checked" \
+      '{ok:true, source:"needrestart", checkedAt:$checked, available:false, kernelStatus:"unknown"}' > "$tmp" 2>/dev/null
+  fi
+
+  [[ -s $tmp ]] && "$SENTRY_BIN_MV" -f "$tmp" "$CACHE_FILE"
+fi
+
+[[ -s $CACHE_FILE ]] || die "needrestart check produced no cache"
+sentry_safe_regular_file "$CACHE_FILE" || die "cache file is not safe to read"
+
+"$SENTRY_BIN_JQ" -e 'type=="object" and (.kernelStatus | type=="string")' "$CACHE_FILE" >/dev/null 2>&1 ||
+  die "needrestart cache contains unparseable data"
+
+"$SENTRY_BIN_CAT" "$CACHE_FILE"

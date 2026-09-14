@@ -42,6 +42,7 @@ Panel {
   readonly property string alertsPath: Qt.resolvedUrl("alerts-fetch").toString().replace(/^file:\/\//, "")
   readonly property string osvPath: Qt.resolvedUrl("osv-fetch").toString().replace(/^file:\/\//, "")
   readonly property string ghsaPath: Qt.resolvedUrl("ghsa-fetch").toString().replace(/^file:\/\//, "")
+  readonly property string needrestartPath: Qt.resolvedUrl("needrestart-fetch").toString().replace(/^file:\/\//, "")
 
   readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy/settings"
   readonly property string configPath: stateDir + "/cyber-sentry.json"
@@ -68,6 +69,7 @@ Panel {
   readonly property bool exploitdbEnabled: setting("exploitdbEnabled", true)
   readonly property bool osvEnabled: setting("osvEnabled", true)
   readonly property bool ghsaEnabled: setting("ghsaEnabled", true)
+  readonly property bool needrestartEnabled: setting("needrestartEnabled", true)
   readonly property bool notifyOnAffected: setting("notifyOnAffected", true)
   readonly property bool notifyOnKev: setting("notifyOnKev", true)
   readonly property bool notifyOnNvd: setting("notifyOnNvd", false)
@@ -94,6 +96,7 @@ Panel {
   property var exploitdbParsed: null
   property var osvParsed: null
   property var ghsaParsed: null
+  property var needrestartParsed: null
   property var installedMap: ({})
   property var aurPackages: []
   property var flatpakPackages: []
@@ -110,6 +113,7 @@ Panel {
   property bool exploitdbFetching: false
   property bool osvFetching: false
   property bool ghsaFetching: false
+  property bool needrestartFetching: false
   property var notified: ({})
   property real lastDigestAt: 0
   property bool stateLoaded: false
@@ -126,7 +130,7 @@ Panel {
   property var userConfig: ({})
   property bool configLoaded: false
 
-  readonly property bool refreshing: archFetching || kevFetching || nvdFetching || alertsFetching || epssFetching || exploitdbFetching || osvFetching || ghsaFetching
+  readonly property bool refreshing: archFetching || kevFetching || nvdFetching || alertsFetching || epssFetching || exploitdbFetching || osvFetching || ghsaFetching || needrestartFetching
   readonly property bool paused: conf("paused", false)
 
   // --- config / settings lookups -------------------------------------------
@@ -335,8 +339,21 @@ Panel {
     return SentryModel.sourceOk(ghsaParsed) ? "ok" : "error"
   }
 
+  readonly property string needrestartStatusLabel: {
+    if (!needrestartEnabled) return "off"
+    if (needrestartFetching) return "syncing"
+    if (needrestartParsed === null) return "idle"
+    if (!SentryModel.sourceOk(needrestartParsed)) return "error"
+    return needrestartParsed.available ? "ok" : "n/a"
+  }
+
+  readonly property bool kernelNeedsReboot: needrestartEnabled
+    && needrestartParsed !== null
+    && SentryModel.sourceOk(needrestartParsed)
+    && needrestartParsed.kernelStatus === "outdated"
+
   readonly property string lastUpdatedText: {
-    var sources = [archParsed, kevParsed, nvdParsed, alertsParsed, epssParsed, exploitdbParsed, osvParsed, ghsaParsed]
+    var sources = [archParsed, kevParsed, nvdParsed, alertsParsed, epssParsed, exploitdbParsed, osvParsed, ghsaParsed, needrestartParsed]
     var newest = ""
     for (var i = 0; i < sources.length; i++) {
       var t = SentryModel.checkedAt(sources[i])
@@ -397,6 +414,11 @@ Panel {
       ghsaFetching = true
       ghsaProcess.command = [ghsaPath]
       ghsaProcess.running = true
+    }
+    if (needrestartEnabled && !needrestartFetching) {
+      needrestartFetching = true
+      needrestartProcess.command = [needrestartPath]
+      needrestartProcess.running = true
     }
     // EPSS runs after other sources (needs CVE list from their caches)
     if (epssEnabled && !epssFetching) {
@@ -547,6 +569,20 @@ Panel {
       parsed = { ok: false, source: "ghsa", error: detail !== "" ? detail : "ghsa-fetch exited " + exitCode }
     }
     ghsaParsed = parsed
+    initialized = true
+  }
+
+  function applyNeedrestart(exitCode, out, err) {
+    needrestartFetching = false
+    var parsed = null
+    if (exitCode === 0) {
+      try { parsed = JSON.parse(String(out || "")) } catch (e) { parsed = null }
+    }
+    if (!parsed || parsed.ok !== true) {
+      var detail = String(err || "").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "")
+      parsed = { ok: false, source: "needrestart", error: detail !== "" ? detail : "needrestart-fetch exited " + exitCode }
+    }
+    needrestartParsed = parsed
     initialized = true
   }
 
@@ -882,6 +918,15 @@ Panel {
   }
 
   Process {
+    id: needrestartProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: needrestartStdout; waitForEnd: true }
+    stderr: StdioCollector { id: needrestartStderr; waitForEnd: true }
+    onExited: function(exitCode) { root.applyNeedrestart(exitCode, needrestartStdout.text, needrestartStderr.text) }
+  }
+
+  Process {
     id: cveProcess
     running: false
     command: []
@@ -1124,6 +1169,7 @@ Panel {
             StatusPill { pillLabel: "ALERT"; pillState: root.alertsStatusLabel }
             StatusPill { pillLabel: "OSV"; pillState: root.osvStatusLabel }
             StatusPill { pillLabel: "GHSA"; pillState: root.ghsaStatusLabel }
+            StatusPill { pillLabel: "KERNEL"; pillState: root.needrestartStatusLabel }
           }
 
           Text {
@@ -1141,6 +1187,17 @@ Panel {
               cursorShape: Qt.PointingHandCursor
               onClicked: root.activeTab = 4
             }
+          }
+
+          Text {
+            width: parent.width
+            visible: root.kernelNeedsReboot
+            wrapMode: Text.Wrap
+            text: "Kernel updated since last boot — reboot to actually run it"
+            color: root.urgent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
           }
 
           TextField {

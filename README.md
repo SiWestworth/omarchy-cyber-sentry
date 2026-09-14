@@ -92,6 +92,19 @@ copies the title, full description, severity, and references (plus the
 fix command, when one's available) as plain text — the same content
 already on screen, just packaged for pasting elsewhere.
 
+## Kernel reboot check
+
+If [`needrestart`](https://github.com/liske/needrestart) is installed, a
+**KERNEL** status pill and a banner ("Kernel updated since last boot —
+reboot to actually run it") appear whenever a `pacman -Syu` has installed a
+newer kernel than the one currently running. Deliberately scoped to just
+the kernel — not full service/process restart detection — since checking
+which *services* need restarting requires root to enumerate other
+processes' open files, and a bar widget silently invoking `sudo` would be
+a real overreach; checking the kernel doesn't need elevated privileges and
+is still the single most common "you should probably reboot" signal.
+Skipped gracefully (pill reads `n/a`) if `needrestart` isn't installed.
+
 ## Exposure trend
 
 A small sparkline in the panel header tracks the affected-package badge count
@@ -257,6 +270,7 @@ Notification history is persisted at `~/.local/state/omarchy/settings/cyber-sent
 - Optional, for the Dev tab: `pip`, `npm`, `cargo`, and/or `go` — each is
   independently optional; the Dev tab just scans whichever are present
 - Optional, for the Foreign tab: `flatpak` — skipped gracefully if absent
+- Optional, for the kernel reboot check: `needrestart` — skipped gracefully if absent
 
 ## Testing
 

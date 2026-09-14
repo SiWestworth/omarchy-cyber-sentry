@@ -713,6 +713,56 @@ t "ghsa-fetch severity values are only high or critical" \
 export XDG_RUNTIME_DIR="$old_runtime"
 
 echo
+echo "== needrestart-fetch =="
+
+env7=$(new_env)
+mkdir -p "$env7/bin" "$env7/cache/omarchy-cyber-sentry"
+export XDG_RUNTIME_DIR="$env7/cache"
+
+# Absent: the real, unmocked path — SENTRY_TEST_NEEDRESTART unset, and this
+# test machine genuinely has no needrestart installed, so this exercises
+# the actual candidate-path lookup finding nothing, not just a forced case.
+nr_absent_out=$(./needrestart-fetch --force 2>&1)
+nr_absent_json=$(jq -c . <<<"$nr_absent_out" 2>/dev/null || echo "{}")
+t "needrestart-fetch: ok:true and available:false when the tool isn't installed" \
+  jq -e '.ok == true and .available == false and .kernelStatus == "unknown"' <<<"$nr_absent_json"
+
+cat >"$env7/bin/fake-needrestart-current" <<'EOF'
+#!/bin/bash
+echo "NEEDRESTART-VER: 3.6"
+echo "NEEDRESTART-KSTA: 1"
+EOF
+chmod +x "$env7/bin/fake-needrestart-current"
+nr_current_out=$(SENTRY_TEST_NEEDRESTART="$env7/bin/fake-needrestart-current" ./needrestart-fetch --force 2>&1)
+nr_current_json=$(jq -c . <<<"$nr_current_out" 2>/dev/null || echo "{}")
+t "needrestart-fetch: KSTA 1 maps to kernelStatus current" \
+  jq -e '.available == true and .kernelStatus == "current"' <<<"$nr_current_json"
+
+cat >"$env7/bin/fake-needrestart-outdated" <<'EOF'
+#!/bin/bash
+echo "NEEDRESTART-VER: 3.6"
+echo "NEEDRESTART-KSTA: 2"
+EOF
+chmod +x "$env7/bin/fake-needrestart-outdated"
+nr_outdated_out=$(SENTRY_TEST_NEEDRESTART="$env7/bin/fake-needrestart-outdated" ./needrestart-fetch --force 2>&1)
+nr_outdated_json=$(jq -c . <<<"$nr_outdated_out" 2>/dev/null || echo "{}")
+t "needrestart-fetch: KSTA 2 maps to kernelStatus outdated" \
+  jq -e '.available == true and .kernelStatus == "outdated"' <<<"$nr_outdated_json"
+
+cat >"$env7/bin/fake-needrestart-weird" <<'EOF'
+#!/bin/bash
+echo "NEEDRESTART-VER: 3.6"
+echo "NEEDRESTART-KSTA: 3"
+EOF
+chmod +x "$env7/bin/fake-needrestart-weird"
+nr_weird_out=$(SENTRY_TEST_NEEDRESTART="$env7/bin/fake-needrestart-weird" ./needrestart-fetch --force 2>&1)
+nr_weird_json=$(jq -c . <<<"$nr_weird_out" 2>/dev/null || echo "{}")
+t "needrestart-fetch: unrecognized KSTA code maps to kernelStatus unknown" \
+  jq -e '.available == true and .kernelStatus == "unknown"' <<<"$nr_weird_json"
+
+export XDG_RUNTIME_DIR="$old_runtime"
+
+echo
 echo "== alerts-fetch fixture =="
 
 env3=$(new_env)
@@ -760,9 +810,9 @@ echo
 echo "== manifest.json =="
 
 t "manifest.json is valid JSON" \
-  jq -e '.schemaVersion == 1 and .version == "2.4.0"' "$(dirname "$0")/../manifest.json"
+  jq -e '.schemaVersion == 1 and .version == "2.5.0"' "$(dirname "$0")/../manifest.json"
 t "manifest.json has all new settings" \
-  jq -e '(.barWidget.defaults.nvdEnabled != null) and (.barWidget.defaults.alertsEnabled != null) and (.barWidget.defaults.epssEnabled != null) and (.barWidget.defaults.exploitdbEnabled != null) and (.barWidget.defaults.showKevBadge != null) and (.barWidget.defaults.kevRecentDays != null) and (.barWidget.defaults.kevAffectsMeOnly != null) and (.barWidget.defaults.osvEnabled != null) and (.barWidget.defaults.ghsaEnabled != null)' "$(dirname "$0")/../manifest.json"
+  jq -e '(.barWidget.defaults.nvdEnabled != null) and (.barWidget.defaults.alertsEnabled != null) and (.barWidget.defaults.epssEnabled != null) and (.barWidget.defaults.exploitdbEnabled != null) and (.barWidget.defaults.showKevBadge != null) and (.barWidget.defaults.kevRecentDays != null) and (.barWidget.defaults.kevAffectsMeOnly != null) and (.barWidget.defaults.osvEnabled != null) and (.barWidget.defaults.ghsaEnabled != null) and (.barWidget.defaults.needrestartEnabled != null)' "$(dirname "$0")/../manifest.json"
 t "manifest.json has the trend/watchlist/digest/dnd settings" \
   jq -e '(.barWidget.defaults.showTrend != null) and (.barWidget.defaults.digestEnabled != null) and (.barWidget.defaults.digestIntervalDays != null) and (.barWidget.defaults.dndEnabled != null) and (.barWidget.defaults.dndStart != null) and (.barWidget.defaults.dndEnd != null)' "$(dirname "$0")/../manifest.json"
 t "manifest.json schema keys match defaults keys exactly" \

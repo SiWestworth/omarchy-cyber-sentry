@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cyber.sentry",
   "name": "Cyber Sentry",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "author": "futuresi",
   "license": "MIT",
   "description": "Cybersecurity threat intelligence: which exploited-in-the-wild vulnerabilities affect the packages installed on this machine, with CISA KEV, CVE detail, EPSS exploit-probability scores, NVD recent CVEs, ExploitDB public exploits, NCSC-NL vendor advisories, and OSV.dev coverage for global pip/npm/cargo/go packages.",
@@ -51,6 +51,7 @@
       "exploitdbEnabled": true,
       "osvEnabled": true,
       "ghsaEnabled": true,
+      "needrestartEnabled": true,
       "notifyOnAffected": true,
       "notifyOnKev": true,
       "notifyOnNvd": false,
@@ -130,6 +131,12 @@
         "key": "ghsaEnabled",
         "type": "boolean",
         "label": "Merge GitHub Security Advisories into the Recent tab",
+        "defaultValue": true
+      },
+      {
+        "key": "needrestartEnabled",
+        "type": "boolean",
+        "label": "Check whether a kernel update needs a reboot (via needrestart)",
         "defaultValue": true
       },
       {
