@@ -692,6 +692,22 @@ Panel {
     return searchQuery !== "" ? ("No matches for \"" + searchQuery + "\"") : fallback
   }
 
+  // Plain-text summary of whatever's currently in the CVE detail overlay —
+  // title, then the same description/severity/references text already
+  // shown on screen (built once, generically, in openCveDetail/
+  // applyCveDetail, regardless of source), plus the fix command when one's
+  // available. Meant for pasting into a writeup, ticket, or chat, not for
+  // machine parsing — hence plain text, not JSON.
+  function buildCveReport() {
+    var parts = [cveDetailTitle, "", cveDetailText]
+    if (cveDetailFix !== null) {
+      parts.push("")
+      parts.push("Fix: " + cveDetailFix.command
+        + " (" + cveDetailFix.packages + " → " + cveDetailFix.version + ")")
+    }
+    return parts.join("\n")
+  }
+
   function applyCveDetail(exitCode, out, err) {
     var parsed = null
     if (exitCode === 0) {
@@ -1617,7 +1633,7 @@ Panel {
             spacing: Style.space(6)
 
             Text {
-              width: parent.width - closeButton.implicitWidth - Style.space(6)
+              width: parent.width - reportButton.implicitWidth - closeButton.implicitWidth - Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               text: root.cveDetailTitle
               elide: Text.ElideRight
@@ -1625,6 +1641,17 @@ Panel {
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
               font.bold: true
+            }
+
+            Button {
+              id: reportButton
+              text: "Copy report"
+              tooltipText: "Copy a plain-text summary (title, severity, description, references) to the clipboard"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              onClicked: root.copyToClipboard(root.buildCveReport())
             }
 
             Button {

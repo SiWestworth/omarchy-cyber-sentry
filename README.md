@@ -81,6 +81,14 @@ affected packages are cleared by running: `sudo pacman -Syu`" — with the
 same Copy/Run in terminal buttons, so you don't have to open each advisory
 individually to find out that one command clears most (or all) of them.
 
+## Copy as report
+
+Every CVE detail view has a **Copy report** button next to Close, for
+pasting into a writeup, ticket, or chat without retyping anything: it
+copies the title, full description, severity, and references (plus the
+fix command, when one's available) as plain text — the same content
+already on screen, just packaged for pasting elsewhere.
+
 ## Exposure trend
 
 A small sparkline in the panel header tracks the affected-package badge count
