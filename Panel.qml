@@ -1090,7 +1090,10 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     padding: Style.spacing.popupPadding
-    contentWidth: popup.fittedContentWidth(Style.space(480))
+    // Widened from 480 to 760 so all 7 tabs fit on one line without
+    // relying on the tab row's own horizontal scroll to reach the last
+    // couple — that scroll still exists as a fallback for narrower themes.
+    contentWidth: popup.fittedContentWidth(Style.space(760))
     contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(580))
 
     PanelKeyCatcher {
@@ -1222,22 +1225,10 @@ Panel {
             StatusPill { pillLabel: "TRIVY"; pillState: root.trivyStatusLabel }
           }
 
-          Text {
-            width: parent.width
-            visible: root.foreignCount > 0
-            wrapMode: Text.Wrap
-            text: root.foreignCount + " AUR/Flatpak package" + (root.foreignCount === 1 ? "" : "s")
-              + " not tracked by Arch Security Tracker — see the Foreign tab"
-            color: "#ffb020"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.activeTab = 4
-            }
-          }
+          // The "N AUR/Flatpak packages not tracked..." banner that used to
+          // live here was removed — the Foreign tab's own "Foreign (N)"
+          // count in the tab bar already communicates this, and having
+          // both said the same thing twice.
 
           Text {
             width: parent.width
