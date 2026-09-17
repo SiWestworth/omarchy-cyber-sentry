@@ -35,15 +35,7 @@ die() {
 
 sentry_prepare_cache_dir "$CACHE_DIR" || die "cache directory is not safe to use"
 
-needs_refresh() {
-  [[ -s $CACHE_FILE ]] || return 0
-  local now age
-  now=$("$SENTRY_BIN_DATE" +%s)
-  age=$((now - $("$SENTRY_BIN_STAT" -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)))
-  (( age >= TTL ))
-}
-
-if [[ ${1:-} == --force ]] || needs_refresh; then
+if [[ ${1:-} == --force ]] || sentry_needs_refresh "$CACHE_FILE" "$TTL"; then
   tmp=$(sentry_mktemp "$CACHE_DIR") || die "could not create a secure temp file"
 
   all_results="[]"

@@ -137,3 +137,14 @@ sentry_safe_regular_file() {
   sentry_owned_by_us "$path" || return 1
   return 0
 }
+
+# True if $1 (a cache file) is missing/empty or older than $2 seconds — i.e.
+# the caller should refetch rather than serve the cache as-is.
+sentry_needs_refresh() {
+  local file=$1 ttl=$2
+  [[ -s $file ]] || return 0
+  local now age
+  now=$("$SENTRY_BIN_DATE" +%s)
+  age=$((now - $("$SENTRY_BIN_STAT" -c %Y "$file" 2>/dev/null || echo 0)))
+  (( age >= ttl ))
+}

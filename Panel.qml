@@ -401,6 +401,7 @@ Panel {
     if (nvdRows.length > 0) parts.push(nvdRows.length + " recent CVE")
     if (alertRows.length > 0) parts.push(alertRows.length + " alert")
     if (osvRows.length > 0) parts.push(osvRows.length + " dev package")
+    if (trivyRows.length > 0) parts.push(trivyRows.length + " container")
     if (parts.length > 0) return parts.join(" · ")
     return "No threats matching the threshold — you are up to date"
   }
@@ -480,7 +481,10 @@ Panel {
     if (badgeCount > 0) parts.push(badgeCount + " affected")
     if (kevCount > 0) parts.push(kevCount + " exploited")
     if (nvdRows.length > 0) parts.push(nvdRows.length + " recent CVE")
-    var body = parts.length > 0 ? parts.join(" · ") : "No threats matching your threshold — you are up to date"
+    if (alertRows.length > 0) parts.push(alertRows.length + " alert")
+    if (osvRows.length > 0) parts.push(osvRows.length + " dev package")
+    if (trivyRows.length > 0) parts.push(trivyRows.length + " container")
+    var body = parts.length > 0 ? parts.join(" · ") : "No threats matching the threshold — you are up to date"
 
     lastDigestAt = now
     saveNotifyState()
@@ -751,16 +755,20 @@ Panel {
   function openCveDetail(row) {
     cveDetailFix = SentryModel.archFixState(row)
 
-    // OSV findings always carry their full description/severity/references
-    // straight from osv-fetch's one-shot /v1/query call — no on-demand
-    // cve.org lookup needed (and OSV ids like GHSA-/PYSEC-/RUSTSEC- aren't
-    // CVE ids cve-fetch could look up anyway). GHSA rows get the same
-    // treatment only when they have no CVE alias — a GHSA row that does
-    // have one falls through to the normal cve.org lookup below instead,
-    // matching how NVD rows (which it's merged alongside in Recent) work.
+    // OSV and Trivy findings always carry their full description/severity/
+    // references straight from their own one-shot fetch call — no on-demand
+    // cve.org lookup needed (and their ids, like GHSA-/PYSEC-/RUSTSEC- for
+    // OSV or a non-CVE VulnerabilityID for Trivy, aren't CVE ids cve-fetch
+    // could look up anyway). trivyRow() is deliberately field-shape-
+    // compatible with osvRow() (ecosystem/packages/version line up the same
+    // way) for exactly this shared path. GHSA rows get the same treatment
+    // only when they have no CVE alias — a GHSA row that does have one falls
+    // through to the normal cve.org lookup below instead, matching how NVD
+    // rows (which it's merged alongside in Recent) work.
     var noCveGhsa = row && row.type === "ghsa" && !SentryModel.firstCve(row)
-    if (row && (row.type === "osv" || noCveGhsa)) {
-      cveDetailTitle = row.type === "osv"
+    var selfContained = row && (row.type === "osv" || row.type === "trivy")
+    if (row && (selfContained || noCveGhsa)) {
+      cveDetailTitle = selfContained
         ? (row.ecosystem + " · " + row.packages + " " + row.version + " · " + row.id)
         : row.id
       var refText = (row.references && row.references.length > 0)
