@@ -114,6 +114,8 @@ Panel {
   property bool alertsFetching: false
   property bool epssFetching: false
   property bool exploitdbFetching: false
+  property bool epssStarted: false
+  property bool exploitdbStarted: false
   property bool osvFetching: false
   property bool ghsaFetching: false
   property bool needrestartFetching: false
@@ -429,11 +431,6 @@ Panel {
       alertsProcess.command = [alertsPath]
       alertsProcess.running = true
     }
-    if (exploitdbEnabled && !exploitdbFetching) {
-      exploitdbFetching = true
-      exploitdbProcess.command = [exploitdbPath]
-      exploitdbProcess.running = true
-    }
     if (osvEnabled && !osvFetching) {
       osvFetching = true
       osvProcess.command = [osvPath]
@@ -454,14 +451,33 @@ Panel {
       trivyProcess.command = [trivyPath]
       trivyProcess.running = true
     }
-    // EPSS runs after other sources (needs CVE list from their caches)
-    if (epssEnabled && !epssFetching) {
+    // EPSS and ExploitDB read the CVE list from arch/kev's cache files, so
+    // they must not launch until arch-fetch and kev-fetch have written them.
+    epssStarted = false
+    exploitdbStarted = false
+    startDependentFetches()
+    checkDigest()
+    recordHistoryPoint()
+  }
+
+  // Starts epss-fetch/exploitdb-fetch once arch-fetch and kev-fetch (their
+  // CVE-list sources) are no longer in flight. Called from refresh() to
+  // cover the case where arch/kev are disabled or already idle, and from
+  // applyArch/applyKev to cover the normal case where they're still running.
+  function startDependentFetches() {
+    if (archFetching || kevFetching) return
+    if (epssEnabled && !epssFetching && !epssStarted) {
+      epssStarted = true
       epssFetching = true
       epssProcess.command = [epssPath]
       epssProcess.running = true
     }
-    checkDigest()
-    recordHistoryPoint()
+    if (exploitdbEnabled && !exploitdbFetching && !exploitdbStarted) {
+      exploitdbStarted = true
+      exploitdbFetching = true
+      exploitdbProcess.command = [exploitdbPath]
+      exploitdbProcess.running = true
+    }
   }
 
   // --- weekly digest ----------------------------------------------------
@@ -506,6 +522,7 @@ Panel {
     evaluateNotifications("arch")
     enrichedRowsDebounce.restart()
     refreshTimer.restart()
+    startDependentFetches()
   }
 
   function applyKev(exitCode, out, err) {
@@ -523,6 +540,7 @@ Panel {
     evaluateNotifications("kev")
     enrichedRowsDebounce.restart()
     refreshTimer.restart()
+    startDependentFetches()
   }
 
   function applyNvd(exitCode, out, err) {
