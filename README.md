@@ -274,7 +274,7 @@ Open the Omarchy settings UI and configure these under the **Cyber Sentry** sect
 ## Keyboard shortcuts (while panel is open)
 
 | Key | Action |
-|---|---|
+| ---|---|
 | `r` | Force refresh |
 | `p` | Pause / resume the scheduler |
 | `1` | Switch to System tab |
